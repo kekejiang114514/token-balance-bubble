@@ -31,13 +31,13 @@
 
 ## 下载安装
 
-APK 在 [`releases/`](releases) 目录，点击下载后直接安装（需要允许「安装未知来源应用」）。
+APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token-balance-bubble/releases)** 下载，也可以点下面表格里的链接，或者从 [`releases/`](releases) 目录取。下载后直接安装（需要允许「安装未知来源应用」）。
 
 | 版本 | 文件 | 大小 | SHA-256 |
 |---|---|---|---|
-| v1.2 | [balance-bubble-1.2.apk](releases/balance-bubble-1.2.apk) | 469 KB | `b9fc8022…d960` |
-| v1.1 | [balance-bubble-1.1.apk](releases/balance-bubble-1.1.apk) | 457 KB | `02d59b7f…8e0f` |
-| v1.0 | [balance-bubble-1.0.apk](releases/balance-bubble-1.0.apk) | 40 KB | `1f2e2455…ccd6` |
+| v1.2 | [balance-bubble-1.2.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.2/balance-bubble-1.2.apk) | 469 KB | `b9fc8022…d960` |
+| v1.1 | [balance-bubble-1.1.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.1/balance-bubble-1.1.apk) | 457 KB | `02d59b7f…8e0f` |
+| v1.0 | [balance-bubble-1.0.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.0/balance-bubble-1.0.apk) | 40 KB | `1f2e2455…ccd6` |
 
 安装前建议核对完整校验和：
 
