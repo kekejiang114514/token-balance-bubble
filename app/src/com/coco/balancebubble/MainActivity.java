@@ -44,7 +44,7 @@ public class MainActivity extends Activity {
 
     private LinearLayout body, advancedBox, statusBox, sizeBlock;
     private TextView advToggle, tvStatus, tvRaw, tvRawToggle, tvPreset, tvSizeVal;
-    private TextView pillChar, pillCode, tvEye;
+    private TextView pillChar, pillCode, tvEye, pillToken;
     private Spinner spProvider, spCurrency, spInterval;
     private EditText etKey, etLabel, etBase, etPath, etExtract, etHeader, etPrefix, etCustom;
     private SeekBar sbSize;
@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     private boolean testing = false;
     private boolean showCharValue = true;
     private boolean showCodeValue = false;
+    private boolean tokenEnabledValue = true;
 
     // ================= 生命周期 =================
 
@@ -111,11 +112,11 @@ public class MainActivity extends Activity {
         p.bottomMargin = ui.dp(13);
         l.setLayoutParams(p);
 
-        TextView t = ui.text("token 余额查询器", 21f, 0xFFFFFFFF);
+        TextView t = ui.text("鲸鱼娘桌宠", 21f, 0xFFFFFFFF);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         l.addView(t);
 
-        TextView s = ui.text("角色头顶浮一个气泡，实时显示 API 余额", 12.5f, 0xFFD8E3FF);
+        TextView s = ui.text("角色常驻桌面，点一下 = 说句卖萌话 / 刷新 API 余额", 12.5f, 0xFFD8E3FF);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         sp.topMargin = ui.dp(6);
@@ -130,7 +131,7 @@ public class MainActivity extends Activity {
         c.addView(ui.cardTitle("三步就能用"));
         c.addView(step("1", "选服务商", "下面第一个下拉框，选你充值的那家，比如 DeepSeek。"));
         c.addView(step("2", "粘贴 API Key", "去服务商官网的「API Keys」页面新建一个，复制粘贴到第二个框。"));
-        c.addView(step("3", "点「保存并显示气泡」", "授权悬浮窗后气泡就出现了。拖动可换位置，点一下立即刷新，长按回到本页。"));
+        c.addView(step("3", "点「保存并显示气泡」", "授权悬浮窗后角色就出现了。拖动可换位置，点一下按当前模式说话或查余额，长按回到本页。"));
         return c;
     }
 
@@ -275,7 +276,32 @@ public class MainActivity extends Activity {
     /** ③ 显示与刷新 */
     private View displayCard() {
         LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("③ 显示与刷新"));
+        c.addView(ui.cardTitle("③ 模式与显示"));
+
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams mrp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mrp.topMargin = ui.dp(12);
+        modeRow.setLayoutParams(mrp);
+        modeRow.addView(ui.text("token 查询模式", 13.2f, Ui.TXT),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pillToken = pill();
+        pillToken.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                tokenEnabledValue = !tokenEnabledValue;
+                renderToggles();
+                applyModeChange();
+            }
+        });
+        modeRow.addView(pillToken);
+        c.addView(modeRow);
+        c.addView(ui.hint("开着＝点角色查余额，气泡里会先显示「正在刷新中…」。"
+                + "关掉＝只当桌宠，点角色随机说句卖萌话，而且每分钟自动冒一句。"));
+
+        c.addView(ui.divider());
 
         c.addView(ui.label("金额币种"));
         String[] items = new String[Currencies.CODES.length];
@@ -434,8 +460,8 @@ public class MainActivity extends Activity {
         });
         c.addView(btnStop);
 
-        c.addView(ui.hint("开启后回到桌面就能看到气泡：拖动＝换位置（松开后记住），"
-                + "点一下＝立刻刷新，长按＝回到这个设置页。"));
+        c.addView(ui.hint("开启后回到桌面就能看到角色：拖动＝换位置（松开后记住），"
+                + "点一下＝按当前模式说话或刷新余额，长按＝回到这个设置页。"));
         return c;
     }
 
@@ -557,10 +583,11 @@ public class MainActivity extends Activity {
     private View aboutCard() {
         LinearLayout c = ui.card();
         c.addView(ui.cardTitle("说明"));
+        c.addView(ui.hint("· 气泡平时是收起的，点一下角色才弹出来，几秒后自动收起。"));
         c.addView(ui.hint("· 密钥只保存在本机 /data/data/com.coco.balancebubble/ 里，"
                 + "查询请求直接发给你填的服务商地址，中间不经过任何服务器。"));
         c.addView(ui.hint("· 开机自启只在「上次开着气泡 + 已授权悬浮窗 + 已填密钥」都满足时才会恢复。"));
-        c.addView(ui.hint("· 版本 1.2　包名 com.coco.balancebubble"));
+        c.addView(ui.hint("· 版本 1.3　包名 com.coco.balancebubble"));
         return c;
     }
 
@@ -613,9 +640,25 @@ public class MainActivity extends Activity {
             pillCode.setBackground(Ui.round(showCodeValue ? Ui.OK_BG : 0xFFF1F4F9,
                     ui.dp(20), ui.dp(1), showCodeValue ? 0xFFB6E2CC : Ui.LINE));
         }
+        if (pillToken != null) {
+            pillToken.setText(tokenEnabledValue ? "已开启" : "已关闭");
+            pillToken.setTextColor(tokenEnabledValue ? Ui.OK : Ui.SUB);
+            pillToken.setBackground(Ui.round(tokenEnabledValue ? Ui.OK_BG : 0xFFF1F4F9,
+                    ui.dp(20), ui.dp(1), tokenEnabledValue ? 0xFFB6E2CC : Ui.LINE));
+        }
         if (sizeBlock != null) {
             sizeBlock.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
         }
+    }
+
+    /** 模式改了立刻生效：服务在跑就让它重排定时任务。 */
+    private void applyModeChange() {
+        Prefs.setTokenEnabled(this, tokenEnabledValue);
+        if (!Prefs.running(this)) return;
+        Intent i = new Intent(this, BubbleService.class);
+        i.setAction(BubbleService.ACTION_START);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+        else startService(i);
     }
 
     private void setStatus(String text, int kind) {
@@ -735,6 +778,7 @@ public class MainActivity extends Activity {
         spInterval.setSelection(intervalIndex(d.interval));
         showCharValue = d.showChar;
         showCodeValue = d.showCode;
+        tokenEnabledValue = d.tokenEnabled;
         sbSize.setProgress(sizeProgress(d.charSize));
         tvSizeVal.setText(d.charSize + " dp");
         filling = false;
@@ -760,6 +804,7 @@ public class MainActivity extends Activity {
         d.charSize = sizeDp();
         d.showChar = showCharValue;
         d.showCode = showCodeValue;
+        d.tokenEnabled = tokenEnabledValue;
         return d;
     }
 
@@ -811,7 +856,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
         Prefs.setRunning(this, true);
-        setStatus("气泡已开启。回到桌面即可看到，拖动换位置 / 点一下刷新 / 长按回到本页。", 1);
+        setStatus("已开启。回到桌面即可看到角色，拖动换位置 / 点一下按模式说话或查余额 / 长按回到本页。", 1);
         updateUi();
     }
 

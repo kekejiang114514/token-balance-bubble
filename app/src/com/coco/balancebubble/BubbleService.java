@@ -27,6 +27,12 @@ import android.widget.LinearLayout;
 
 import java.io.InputStream;
 
+/**
+ * 悬浮窗服务：角色常驻，气泡默认收起。
+ *
+ * <p>token 查询模式：点一下角色刷新余额，气泡里先显示「正在刷新中…」再显示结果。
+ * 桌宠模式：点一下角色随机说一句卖萌话，并且每分钟自动说一句。
+ */
 public class BubbleService extends Service {
 
     public static final String ACTION_START = "com.coco.balancebubble.START";
@@ -37,6 +43,11 @@ public class BubbleService extends Service {
 
     private static final String CH_ID = "bubble";
     private static final int NOTI_ID = 8848;
+
+    /** 结果出来后气泡停留多久再自动收起 */
+    private static final long AUTO_HIDE_MS = 7000L;
+    /** 桌宠模式自动说话的间隔 */
+    private static final long PET_INTERVAL_MS = 60000L;
 
     private WindowManager wm;
     private WindowManager.LayoutParams lp;
@@ -49,6 +60,8 @@ public class BubbleService extends Service {
     private boolean dragging = false;
     /** 是否已经完成首次定位（避免布局回调把手动位置冲掉） */
     private boolean placed = false;
+    /** 正在飞的这次请求，结果要不要弹出来给用户看 */
+    private boolean revealResult = false;
 
     @Override
     public IBinder onBind(Intent i) {
@@ -78,8 +91,7 @@ public class BubbleService extends Service {
         }
         if (ACTION_REFRESH.equals(action)) {
             if (root == null) show();
-            ui.removeCallbacks(tick);
-            ui.post(tick);
+            restartTimers();
             return START_STICKY;
         }
         Prefs.setRunning(this, true);
@@ -94,8 +106,7 @@ public class BubbleService extends Service {
                 }
             });
         }
-        ui.removeCallbacks(tick);
-        ui.post(tick);
+        restartTimers();
         return START_STICKY;
     }
 
@@ -103,7 +114,7 @@ public class BubbleService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm.getNotificationChannel(CH_ID) == null) {
-                NotificationChannel ch = new NotificationChannel(CH_ID, "余额查询",
+                NotificationChannel ch = new NotificationChannel(CH_ID, "桌宠",
                         NotificationManager.IMPORTANCE_MIN);
                 ch.setShowBadge(false);
                 nm.createNotificationChannel(ch);
@@ -119,7 +130,8 @@ public class BubbleService extends Service {
         } else {
             b = new Notification.Builder(this);
         }
-        b.setContentTitle("余额查询运行中")
+        boolean token = Prefs.tokenEnabled(this);
+        b.setContentTitle(token ? "余额查询运行中" : "鲸鱼娘桌宠运行中")
                 .setContentText("点这里回到设置")
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentIntent(pi)
@@ -141,6 +153,9 @@ public class BubbleService extends Service {
         col.setGravity(Gravity.CENTER_HORIZONTAL);
 
         bubble = new BubbleView(this);
+        // 气泡平时收起：用 INVISIBLE 而不是 GONE，窗口尺寸保持恒定，
+        // 弹出/收起时角色不会上下跳动。
+        bubble.setVisibility(View.INVISIBLE);
         col.addView(bubble);
 
         charView = new ImageView(this);
@@ -253,6 +268,56 @@ public class BubbleService extends Service {
         }
     }
 
+    // ==================== 气泡的弹出与收起 ====================
+
+    /** 说一句话（桌宠模式），过一会儿自动收起。 */
+    private void say(String text) {
+        if (bubble == null) return;
+        bubble.setAmountSize(phraseSize(text));
+        bubble.setData("", text, false);
+        revealBubble(AUTO_HIDE_MS);
+    }
+
+    /** 句子长就缩小字号，避免撑出屏幕。 */
+    private float phraseSize(String text) {
+        int n = text == null ? 0 : text.length();
+        if (n > 12) return dp(14);
+        if (n > 9) return dp(17);
+        return dp(20);
+    }
+
+    /** 弹出气泡，并在指定时长后自动收起。 */
+    private void revealBubble(long hideAfterMs) {
+        if (bubble == null) return;
+        ui.removeCallbacks(hideBubble);
+        bubble.setVisibility(View.VISIBLE);
+        if (hideAfterMs > 0) ui.postDelayed(hideBubble, hideAfterMs);
+    }
+
+    private final Runnable hideBubble = new Runnable() {
+        @Override
+        public void run() {
+            if (bubble == null) return;
+            bubble.setVisibility(View.INVISIBLE);
+        }
+    };
+
+    /** 刷新中：气泡立刻弹出并显示状态，查询期间不收起。 */
+    private void showBusy() {
+        if (bubble == null) return;
+        ui.removeCallbacks(hideBubble);
+        bubble.setAmountSize(dp(18));
+        bubble.setData(balanceLabel(), "正在刷新中…", false);
+        bubble.setVisibility(View.VISIBLE);
+    }
+
+    private String balanceLabel() {
+        String name = Prefs.label(this).trim();
+        return name.isEmpty() ? "" : name + " 余额";
+    }
+
+    // ==================== 点击与拖拽 ====================
+
     private void setupDrag() {
         root.setOnTouchListener(new View.OnTouchListener() {
             float downX, downY;
@@ -294,8 +359,8 @@ public class BubbleService extends Service {
                             // 于是每次松手都被拉回默认位置。现在直接把当前位置收边后落盘。
                             dragging = false;
                             clampAndSave();
-                        } else {
-                            refresh();
+                        } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                            onTap(e.getRawX(), e.getRawY());
                         }
                         return true;
                     default:
@@ -303,6 +368,34 @@ public class BubbleService extends Service {
                 }
             }
         });
+    }
+
+    /** 点一下：按模式决定是刷新余额还是说句卖萌话。 */
+    private void onTap(float rawX, float rawY) {
+        // 气泡正开着的时候，点气泡＝立刻收起。
+        if (bubble != null && bubble.getVisibility() == View.VISIBLE && inside(bubble, rawX, rawY)) {
+            ui.removeCallbacks(hideBubble);
+            hideBubble.run();
+            return;
+        }
+        // 只有点在角色身上才算数（角色关掉时整个窗口都可以点）。
+        if (!inside(charView, rawX, rawY)) return;
+        if (Prefs.tokenEnabled(this)) {
+            refresh(true);
+        } else {
+            say(PetTalk.random());
+        }
+    }
+
+    /** 判断触点是否落在某个视图上，留一点容差方便点中。 */
+    private boolean inside(View v, float rawX, float rawY) {
+        // 视图不存在或没显示时按「整块区域」处理，免得角色关掉后点哪都没反应。
+        if (v == null || v.getVisibility() != View.VISIBLE) return true;
+        int[] loc = new int[2];
+        v.getLocationOnScreen(loc);
+        float pad = dp(10);
+        return rawX >= loc[0] - pad && rawX <= loc[0] + v.getWidth() + pad
+                && rawY >= loc[1] - pad && rawY <= loc[1] + v.getHeight() + pad;
     }
 
     /** 让窗口待在屏幕内，并把当前位置记住。 */
@@ -353,23 +446,57 @@ public class BubbleService extends Service {
         startActivity(i);
     }
 
+    // ==================== 定时任务 ====================
+
+    /** 按当前模式重排定时任务：token 模式定时静默刷新，桌宠模式定时说话。 */
+    private void restartTimers() {
+        ui.removeCallbacks(tick);
+        long first = Prefs.tokenEnabled(this)
+                ? 1500L
+                : PET_INTERVAL_MS;
+        ui.postDelayed(tick, first);
+    }
+
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
-            refresh();
-            ui.removeCallbacks(tick);
-            ui.postDelayed(tick, Math.max(1, Prefs.interval(BubbleService.this)) * 60000L);
+            if (Prefs.tokenEnabled(BubbleService.this)) {
+                refresh(false);
+                ui.postDelayed(tick, Math.max(1, Prefs.interval(BubbleService.this)) * 60000L);
+            } else {
+                say(PetTalk.random());
+                ui.postDelayed(tick, PET_INTERVAL_MS);
+            }
         }
     };
 
-    private void refresh() {
-        if (refreshing) return;
+    /**
+     * 查询余额。
+     *
+     * @param reveal true 表示用户点的，要把气泡弹出来（先显示「正在刷新中…」）；
+     *               false 表示定时静默刷新，只更新数据不打扰用户。
+     */
+    private void refresh(boolean reveal) {
         if (root == null || bubble == null) return;
         if (Prefs.key(this).isEmpty()) {
-            bubble.setData("请先在设置里填 API Key", "—", true);
+            if (reveal) {
+                bubble.setAmountSize(dp(15));
+                bubble.setData("", "还没填 API Key 哦", true);
+                revealBubble(AUTO_HIDE_MS);
+            }
+            return;
+        }
+        if (refreshing) {
+            // 已有请求在飞：把气泡弹出来等结果就好，不必重复发请求。
+            if (reveal) {
+                revealResult = true;
+                showBusy();
+            }
             return;
         }
         refreshing = true;
+        revealResult = reveal;
+        if (reveal) showBusy();
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -386,20 +513,23 @@ public class BubbleService extends Service {
     }
 
     private void applyResult(BalanceApi.Result r) {
+        boolean reveal = revealResult;
+        revealResult = false;
         if (bubble == null) return;
         if (r.ok) {
-            String name = Prefs.label(this).trim();
-            String label = name.isEmpty() ? "" : name + " 余额";
             String text = r.currency + r.amount;
-            bubble.setData(label, text, false);
+            bubble.setAmountSize(dp(21));
+            bubble.setData(balanceLabel(), text, false);
             Prefs.setLast(this, text);
             Prefs.setLastErr(this, "");
         } else {
             String msg = r.error == null ? "查询失败" : r.error;
             String first = msg.split("\n")[0];
-            bubble.setData(first, "—", true);
+            bubble.setAmountSize(dp(15));
+            bubble.setData("", first, true);
             Prefs.setLastErr(this, msg);
         }
+        if (reveal) revealBubble(AUTO_HIDE_MS);
     }
 
     @Override
@@ -428,6 +558,3 @@ public class BubbleService extends Service {
         super.onDestroy();
     }
 }
-
-
-

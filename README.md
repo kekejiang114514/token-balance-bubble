@@ -1,15 +1,17 @@
-# token 余额查询器
+# 鲸鱼娘桌宠
 
-一个常驻屏幕的 Android 悬浮气泡，实时显示你的 API 账户余额。像对话气泡一样浮在其他应用上面，拖到顺手的位置，抬眼就能看到还剩多少钱。
+一个常驻桌面的 Android 悬浮角色。可以当桌宠养着——点一下她会说句卖萌话，每分钟自己冒一句；也可以开启 token 查询模式，点一下就看到 API 账户还剩多少钱。
 
 支持 DeepSeek、硅基流动、Moonshot、OpenRouter、OpenAI 以及任意 OpenAI 兼容的自定义接口。
 
 ## 特性
 
-- **悬浮气泡**：`TYPE_APPLICATION_OVERLAY` 常驻窗口，不占用状态栏，不干扰其他应用
+- **两种模式**：token 查询模式点角色查余额；关掉就只剩桌宠，点一下随机说句卖萌话，每分钟自动冒一句
+- **悬浮角色**：`TYPE_APPLICATION_OVERLAY` 常驻窗口，不占用状态栏，不干扰其他应用
 - **随手拖动**：拖到任意位置，松手自动记住，重启后仍在原处；窗口尺寸变化或旋转屏幕时会自动收回屏幕内
-- **一触即查**：单击气泡立刻刷新，长按打开设置，拖动时不会误触发
-- **定时刷新**：间隔可调（1 分钟 ~ 12 小时），按你关心的粒度
+- **点一下才说话**：气泡平时收起，点角色才弹出来，说完自动收回；长按打开设置，拖动时不会误触发
+- **刷新有反馈**：查余额时气泡里先显示「正在刷新中…」，再换成金额
+- **定时刷新**：间隔可调（1 分钟 ~ 12 小时），按你关心的粒度；定时刷新是静默的，不会弹气泡
 - **角色贴图**：气泡下方可挂一个角色/头像，适合已经有形象的项目
 - **15 种货币**：下拉选择，默认人民币；支持自动识别接口返回的币种，也能自定义符号
 - **开机自启**：按上次的状态恢复，不需要每次手动打开
@@ -35,6 +37,7 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 
 | 版本 | 文件 | 大小 | SHA-256 |
 |---|---|---|---|
+| v1.3 | [balance-bubble-1.3.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.3/balance-bubble-1.3.apk) | 469 KB | `5c27986b…1b39` |
 | v1.2 | [balance-bubble-1.2.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.2/balance-bubble-1.2.apk) | 469 KB | `b9fc8022…d960` |
 | v1.1 | [balance-bubble-1.1.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.1/balance-bubble-1.1.apk) | 457 KB | `02d59b7f…8e0f` |
 | v1.0 | [balance-bubble-1.0.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.0/balance-bubble-1.0.apk) | 40 KB | `1f2e2455…ccd6` |
@@ -42,11 +45,11 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 安装前建议核对完整校验和：
 
 ```sh
-sha256sum balance-bubble-1.2.apk
-# b9fc80229d185aa801081362d13fc62ace5674f4fbe0e3769695afa3c1ead960
+sha256sum balance-bubble-1.3.apk
+# 5c27986b8155766cff26082aa234ebb61e1f850c44822b2b9694617d9d6e1b39
 ```
 
-**版本关系**：三个版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留。如果只想用最新版，装 v1.2 就行。
+**版本关系**：四个版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留。如果只想用最新版，装 v1.3 就行。
 
 ## 使用
 
@@ -55,14 +58,22 @@ sha256sum balance-bubble-1.2.apk
 3. 点「测试连接」，确认能读到余额
 4. 点「保存并显示气泡」，按提示授予「显示在其他应用上层」权限
 
-之后回到桌面就能看到气泡：
+之后回到桌面就能看到角色（气泡平时是收起的）：
 
 | 操作 | 效果 |
 |---|---|
-| 拖动气泡 | 移动位置，松手后记住 |
-| 单击气泡 | 立刻刷新余额 |
-| 长按气泡 | 打开设置界面 |
+| 拖动角色 | 移动位置，松手后记住 |
+| 单击角色 | token 查询模式下刷新余额；桌宠模式下随机说句卖萌话 |
+| 单击气泡 | 立刻把气泡收起来 |
+| 长按角色 | 打开设置界面 |
 | 点通知 | 打开设置界面 |
+
+**两种模式**（在设置页「③ 模式与显示」里切换，改完立刻生效）：
+
+| 模式 | 点一下角色 | 自动行为 |
+|---|---|---|
+| token 查询模式（默认开启） | 气泡里先显示「正在刷新中…」，再显示余额 | 按设定间隔静默刷新余额 |
+| 桌宠模式（关掉这个开关） | 随机说一句卖萌话 | 每隔一分钟自动说一句 |
 
 ## 界面说明
 
@@ -153,6 +164,7 @@ app/
   res/mipmap/            应用图标
 tools/                   构建与校验脚本
 test/CurrencyTest.java   币种与预设的纯逻辑单测
+test/PetTalkTest.java    桌宠语料库的纯逻辑单测
 releases/                历史版本 APK
 ```
 
@@ -164,21 +176,28 @@ releases/                历史版本 APK
 javac -encoding UTF-8 -d out/test \
     app/src/com/coco/balancebubble/Currencies.java \
     app/src/com/coco/balancebubble/Presets.java \
-    test/CurrencyTest.java
+    app/src/com/coco/balancebubble/PetTalk.java \
+    test/CurrencyTest.java \
+    test/PetTalkTest.java
 java -cp out/test CurrencyTest
+java -cp out/test PetTalkTest
 ```
 
-覆盖：币种表完整性、符号前缀/后缀分支、代码大小写与别名（`RMB` → `CNY`）、自动识别与自定义分支，以及每个服务商预设声明的币种都在币种表里。
+覆盖：
+
+- 币种表完整性、符号前缀/后缀分支、代码大小写与别名（`RMB` → `CNY`）、自动识别与自定义分支，以及每个服务商预设声明的币种都在币种表里
+- 桌宠语料库非空、无空句、无重复、单句长度不超气泡宽度、随机抽 2000 次无连续重复、1000 次能覆盖全部语料
 
 ## 版本历史
 
 见 [CHANGELOG.md](CHANGELOG.md)。简要来说：
 
+- **v1.3** —— 新增「token 查询模式」开关与桌宠模式（点角色随机说卖萌话、每分钟自动说一句），应用更名「鲸鱼娘桌宠」；气泡改为点击才弹出、7 秒后自动收起；查询余额时显示「正在刷新中…」
 - **v1.2** —— 界面重做为卡片式（每个参数都有说明、带实时预览、高级设置默认折叠）；币种改为 15 种货币的下拉框，默认人民币；修复拖动后位置被重置的 bug
 - **v1.1** —— 应用更名为「token 余额查询器」，内置角色贴图与桌面图标，扩展为六家服务商预设，金额路径与币种支持自动识别
 - **v1.0** —— 首个可用版本，支持 DeepSeek 余额查询与悬浮显示
 
-> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存，仓库中的 `app/src` 是 v1.2 的代码。
+> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存，仓库中的 `app/src` 是 v1.3 的代码。
 
 ## 已知限制
 

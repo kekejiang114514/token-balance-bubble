@@ -46,6 +46,8 @@ public class Prefs {
         public int charSize = 96;
         public boolean showChar = true;
         public boolean showCode = false;
+        /** true = token 查询模式；false = 纯桌宠模式 */
+        public boolean tokenEnabled = true;
 
         public boolean configured() {
             return base != null && !base.trim().isEmpty() && key != null && !key.trim().isEmpty();
@@ -68,6 +70,7 @@ public class Prefs {
         d.charSize = charSize(c);
         d.showChar = showChar(c);
         d.showCode = showCode(c);
+        d.tokenEnabled = tokenEnabled(c);
         return d;
     }
 
@@ -87,6 +90,7 @@ public class Prefs {
                 .putInt("charsize", clampCharSize(d.charSize))
                 .putBoolean("showchar", d.showChar)
                 .putBoolean("showcode", d.showCode)
+                .putBoolean("tokenenabled", d.tokenEnabled)
                 .apply();
     }
 
@@ -127,6 +131,13 @@ public class Prefs {
     // ---------------- 显示 ----------------
 
     public static int interval(Context c) { return clampInterval(i(c, "interval", 5)); }
+
+    /** token 查询模式：开着才查余额，关掉就只当桌宠。 */
+    public static boolean tokenEnabled(Context c) { return b(c, "tokenenabled", true); }
+
+    public static void setTokenEnabled(Context c, boolean v) {
+        get(c).edit().putBoolean("tokenenabled", v).apply();
+    }
     public static boolean showChar(Context c) { return b(c, "showchar", true); }
     public static void setShowChar(Context c, boolean v) {
         get(c).edit().putBoolean("showchar", v).apply();

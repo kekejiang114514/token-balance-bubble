@@ -2,11 +2,8 @@
 # -*- coding: utf-8 -*-
 """生成 App 的 AndroidManifest.xml（二进制 AXML）"""
 import sys, os
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, '/root/build')
 import axml_build as B
-
-PUBLIC_XML = os.path.join(HERE, 'public.xml')
 
 TYPE_STR = 0x03
 TYPE_REF = 0x01
@@ -60,7 +57,7 @@ def main():
     ])
 
     app = E('application', attrs=[
-        an('label', TYPE_STR, 'token 余额查询器'),
+        an('label', TYPE_STR, '鲸鱼娘桌宠'),
         an('icon', TYPE_REF, ICON_REF),
         an('roundIcon', TYPE_REF, ICON_REF),
         an('allowBackup', TYPE_BOOL, False),
@@ -71,8 +68,8 @@ def main():
 
     root = E('manifest', attrs=[
         A(None, 'package', TYPE_STR, 'com.coco.balancebubble'),
-        an('versionCode', TYPE_INT_DEC, 3),
-        an('versionName', TYPE_STR, '1.2'),
+        an('versionCode', TYPE_INT_DEC, 4),
+        an('versionName', TYPE_STR, '1.3'),
     ], children=[
         E('uses-sdk', attrs=[
             an('minSdkVersion', TYPE_INT_DEC, 23),
@@ -85,9 +82,9 @@ def main():
         app,
     ])
 
-    ids = B.load_attr_ids(PUBLIC_XML)
+    ids = B.load_attr_ids('/root/build/public.xml')
     data = B.build([root], [('android', ANDROID_NS)], ids, {'android': 1})
-    out = sys.argv[1] if len(sys.argv) > 1 else 'AndroidManifest.xml'
+    out = sys.argv[1] if len(sys.argv) > 1 else '/root/build/out/AndroidManifest.xml'
     with open(out, 'wb') as f:
         f.write(data)
     sys.stderr.write('manifest written: %d bytes\n' % len(data))
