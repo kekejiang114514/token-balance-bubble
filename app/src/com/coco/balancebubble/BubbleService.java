@@ -227,10 +227,11 @@ public class BubbleService extends Service {
         return v;
     }
 
-    /** 角色是正方形画布，边长＝设置里的「角色大小」。 */
+    /** 角色画布：宽度＝设置里的「角色大小」，高度留出起跳净空。 */
     private LinearLayout.LayoutParams charParams() {
         int cw = (int) dp(Prefs.charSize(this));
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(cw, cw);
+        int ch = (int) (cw * PetView.VIEW_H_RATIO);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(cw, ch);
         cp.topMargin = (int) -dp(6);
         return cp;
     }
@@ -371,7 +372,7 @@ public class BubbleService extends Service {
         if (!inside(charView, rawX, rawY)) return;
         if (Prefs.queriesBalance(this)) {
             // 混合模式点一下＝查余额；单 token 模式点一下也只是查余额。
-            playAction(Prefs.mode(this) == Prefs.MODE_MIXED ? PetAction.LOOK : PetAction.NOD);
+            playAction(Prefs.mode(this) == Prefs.MODE_MIXED ? PetAction.LEAN : PetAction.NOD);
             refresh(true);
         } else {
             speak();
@@ -528,7 +529,7 @@ public class BubbleService extends Service {
             if (!reveal && Prefs.mode(this) == Prefs.MODE_MIXED
                     && prev != null && !prev.isEmpty() && !"--".equals(prev)
                     && !prev.equals(text)) {
-                playAction(PetAction.SURPRISE);
+                playAction(PetAction.POP);
                 bubble.setAmountSize(dp(20));
                 bubble.setData("余额有变化", text, false);
                 revealBubble(AUTO_HIDE_MS + 2500L);

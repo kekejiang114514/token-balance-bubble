@@ -1,100 +1,112 @@
 package com.coco.balancebubble;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.Path;
+import android.graphics.PointF;
+import android.graphics.PorterDuff;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.view.View;
 
+import java.io.InputStream;
 import java.util.Random;
 
 /**
- * 骨架式角色：鲸鱼娘。
+ * 角色视图：把 assets/char.png 画出来，并让它动起来。
  *
- * <p>不引入任何位图素材，全部部件（身体 / 肚皮 / 眼睛 / 腮红 / 嘴 / 左右鳍 / 尾鳍 / 脚）
- * 都在代码里用 Path 画出来，因此可以按「关节」做层级变换：
- * 鳍绕肩点旋转＝挥手，眼睑压缩＝眨眼，身体缩放＝呼吸，尾鳍绕尾根摆动＝游动。
+ * <p>这是「整体骨架」式的做法——角色只有一张整图，不能把手臂单独拆出来转，
+ * 所以动作是围绕「脚底着地点」这一个支点做的整体姿态变换：
+ * 位移（浮沉、蹦跳）、旋转（歪头、摇头、转圈）、缩放（呼吸、蹲下、伸懒腰、落地挤压）。
+ * 支点固定在脚底，所以挤压时脚不会离地，转圈时是原地转，看起来才像有重心的角色。
+ * 再配一个随高度变化的地面投影，跳起来才有腾空感。
  *
- * <p>姿势每帧由时间戳现算（无状态动画），所以随时可以打断、切换动作。
+ * <p>想让它真正「挥手、眨眼」，需要把角色拆成部件图层（手臂、眼睑等），
+ * 单张整图做不到，这点在 README 里有说明。
  */
 public class PetView extends View {
 
-    private final Paint bodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint whitePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint eyePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint highlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint blushPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint mouthPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path path = new Path();
-    private final RectF oval = new RectF();
+    /** 一帧的姿态参数。 */
+    private static final class Pose {
+        float dx;       // 水平位移（相对宽度）
+        float dy;       // 垂直位移（相对宽度，负＝向上）
+        float rot;      // 旋转角度
+        float sx = 1f;  // 横向缩放
+        float sy = 1f;  // 纵向缩放
+        float pivotY = 0f; // 旋转支点（0＝脚底，0.5＝贴图中心）
+    }
+
+    /** 贴图占视图宽度的比例：留出倾斜/蹦跳的余量，正好卡在不被裁掉的上限。 */
+    private static final float FIT = 0.82f;
+    /** 视图高度 = VIEW_H_RATIO × 宽度，多出来的就是起跳净空。 */
+    public static final float VIEW_H_RATIO = 1.15f;
+    /** 旋转角度上限：实测超过 15° 贴图两侧会被视图裁掉。 */
+    private static final float MAX_TILT = 12f;
+
+    private static final long FRAME_MS = 33L;      // 约 30fps
+    private static final long IDLE_MIN_MS = 3200L; // 待机随机动作间隔
+    private static final long IDLE_MAX_MS = 7200L;
+
+    private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+    private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF shadowRect = new RectF();
+    private final RectF dst = new RectF();
+    private final Matrix matrix = new Matrix();
+    private final Pose pose = new Pose();
     private final Random random = new Random();
 
-    /** 动画目标帧间隔（毫秒）。 */
-    private static final long FRAME_MS = 33L;
-
-    private final float density;
-    private LinearGradient bodyGradient;   // 随尺寸变化，缓存一次
-
+    private Bitmap source;      // 原始贴图
+    private Bitmap scaled;      // 按当前尺寸预缩放的贴图
+    private int scaledFor = -1; // scaled 对应的视图宽度，尺寸变了要重建
     private boolean animated = true;
-    private long born = System.currentTimeMillis();
-    private long blinkAt = 0, blinkUntil = 0;
-    private long actionStart = 0, actionEnd = 0;
+
     private PetAction action = PetAction.IDLE;
+    private long actionStart = 0;
+    private long actionEnd = 0;
     private long nextIdleAt = 0;
 
-    public PetView(Context c) {
-        super(c);
-        density = c.getResources().getDisplayMetrics().density;
-        bodyPaint.setStyle(Paint.Style.FILL);
-        strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeWidth(dp(1.6f));
-        strokePaint.setColor(0xFF2C3E63);
-        whitePaint.setStyle(Paint.Style.FILL);
-        whitePaint.setColor(0xFFF2F6FC);
-        eyePaint.setStyle(Paint.Style.FILL);
-        eyePaint.setColor(0xFF22314F);
-        highlightPaint.setStyle(Paint.Style.FILL);
-        highlightPaint.setColor(0xFFFFFFFF);
-        blushPaint.setStyle(Paint.Style.FILL);
-        blushPaint.setColor(0x3DEE8A96);
-        mouthPaint.setStyle(Paint.Style.STROKE);
-        mouthPaint.setStrokeWidth(dp(1.8f));
-        mouthPaint.setStrokeCap(Paint.Cap.ROUND);
-        mouthPaint.setColor(0xFF2C3E63);
+    public PetView(Context context) {
+        super(context);
+        load(context);
+        shadowPaint.setColor(0x33000000);
     }
 
-    private float dp(float v) {
-        return v * density;
+    private void load(Context context) {
+        try {
+            InputStream is = context.getAssets().open("char.png");
+            source = BitmapFactory.decodeStream(is);
+            is.close();
+        } catch (Exception e) {
+            source = null;
+        }
     }
 
-    /** 关掉动画可以让角色静止站立（省电）。 */
-    public void setAnimated(boolean v) {
-        if (animated == v) return;
-        animated = v;
+    public void setAnimated(boolean on) {
+        if (animated == on) return;
+        animated = on;
+        if (on) {
+            play(PetAction.IDLE);
+        }
         invalidate();
-        if (v) postInvalidateOnAnimation();
     }
 
     public boolean isAnimated() {
         return animated;
     }
 
-    /** 外部触发一个动作（会打断当前动作）。 */
+    /** 播放一个动作；IDLE 表示停下当前动作。 */
     public void play(PetAction a) {
         if (a == null || a == PetAction.IDLE) {
             action = PetAction.IDLE;
-            actionEnd = 0;
+            actionStart = actionEnd = 0;
             return;
         }
         long now = System.currentTimeMillis();
         action = a;
         actionStart = now;
         actionEnd = now + a.duration();
-        if (animated) postInvalidateOnAnimation();
     }
 
     public PetAction currentAction() {
@@ -102,294 +114,197 @@ public class PetView extends View {
     }
 
     @Override
-    protected void onMeasure(int wSpec, int hSpec) {
-        int w = resolveSize((int) dp(96), wSpec);
-        setMeasuredDimension(w, w);
-    }
-
-    @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
-        bodyGradient = null;   // 渐变坐标跟尺寸绑定，尺寸变了要重建
-    }
-
-    /** 一帧要用到的全部姿势参数，单位是「相对于角色边长 S 的比例」或角度。 */
-    private static class Pose {
-        float rootDy;      // 整体上下位移
-        float rootDx;      // 整体左右位移
-        float tilt;        // 整体倾斜（度），绕脚底
-        float bodySx = 1f;
-        float bodySy = 1f;
-        float tail;        // 尾鳍角度
-        float armL;        // 左鳍角度（0 = 自然下垂）
-        float armR;
-        float eyeOpen = 1f;
-        float pupilDx;     // 瞳孔左右偏移
-        float mouth;       // 张嘴程度 0..1
-        float blush = 1f;  // 腮红浓度
-    }
-
-    /** 当前时间对应的完整姿势：待机动画＋正在播放的动作。 */
-    Pose poseAt(long now) {
-        Pose p = new Pose();
-        float t = (now - born) / 1000f;
-        // 待机呼吸
-        float breath = (float) Math.sin(t * 1.7f);
-        p.bodySy = 1f + 0.020f * breath;
-        p.bodySx = 1f - 0.014f * breath;
-        p.rootDy = -0.006f * Math.max(0f, breath);
-        p.tail = (float) (7 * Math.sin(t * 1.1f));
-        p.armL = (float) (7 * Math.sin(t * 1.1f + 0.7f));
-        p.armR = -(float) (7 * Math.sin(t * 1.1f + 0.7f));
-
-        // 眨眼
-        if (blinkUntil > now) {
-            float f = (blinkUntil - now) / 150f;       // 1 → 0
-            p.eyeOpen = Math.max(0f, Math.min(1f, 1f - (float) Math.sin(f * Math.PI) * 1.4f));
-        } else {
-            p.eyeOpen = 1f;
-        }
-
-        if (now < actionEnd) {
-            float f = (now - actionStart) / (float) Math.max(1, action.duration());
-            applyAction(p, action, f);
-        }
-        return p;
-    }
-
-    /** 把动作在进度 f（0..1）处的姿态叠加到 p 上。 */
-    private void applyAction(Pose p, PetAction a, float f) {
-        float wave = (float) Math.sin(f * Math.PI * 2);
-        switch (a) {
-            case WAVE: {
-                float env = envelope(f, 0.18f, 0.72f);
-                p.armR = -132f * env + 22f * env * (float) Math.sin(f * Math.PI * 6);
-                p.armL = 10f * env;
-                p.tilt = 5f * env;
-                break;
-            }
-            case HAPPY: {
-                float env = envelope(f, 0.15f, 0.75f);
-                p.armL = -96f * env;
-                p.armR = 96f * env;
-                p.rootDy = -0.09f * (float) Math.sin(Math.min(1f, f * 1.5f) * Math.PI);
-                p.bodySy = 1f + 0.06f * env;
-                p.blush = 1.6f;
-                break;
-            }
-            case NOD: {
-                p.rootDy = -0.028f * (float) Math.abs(Math.sin(f * Math.PI * 2));
-                p.bodySy = 1f - 0.035f * (float) Math.abs(Math.sin(f * Math.PI));
-                p.eyeOpen = 1f - 0.5f * (float) Math.abs(Math.sin(f * Math.PI));
-                break;
-            }
-            case SHAKE: {
-                p.tilt = 8f * (float) Math.sin(f * Math.PI * 6) * envelope(f, 0.15f, 0.8f);
-                break;
-            }
-            case JUMP: {
-                float air = (float) Math.sin(f * Math.PI);
-                p.rootDy = -0.13f * air;
-                p.bodySy = 1f + 0.10f * air - 0.10f * Math.max(0f, 1f - f / 0.12f);
-                p.bodySx = 1f - 0.07f * air;
-                p.tail = -18f * air;
-                p.armL = -30f * air;
-                p.armR = 30f * air;
-                break;
-            }
-            case SWIM: {
-                p.tail = 26f * (float) Math.sin(f * Math.PI * 6);
-                p.tilt = 5f * (float) Math.sin(f * Math.PI * 4);
-                p.rootDx = 0.012f * (float) Math.sin(f * Math.PI * 4);
-                p.armL = 22f * (float) Math.sin(f * Math.PI * 6);
-                p.armR = -22f * (float) Math.sin(f * Math.PI * 6);
-                break;
-            }
-            case SLEEPY: {
-                float sleep = (float) Math.sin(f * Math.PI);
-                p.eyeOpen = Math.min(p.eyeOpen, 1f - 0.94f * sleep);
-                p.bodySy = 1f + 0.03f * sleep;
-                p.tail = 3f * (float) Math.sin(f * Math.PI * 2);
-                break;
-            }
-            case LOOK: {
-                p.pupilDx = 0.020f * wave;
-                p.tilt = 4f * wave;
-                break;
-            }
-            case SURPRISE: {
-                float s = (float) Math.sin(f * Math.PI);
-                p.eyeOpen = 1f;
-                p.rootDy = -0.05f * s;
-                p.bodySy = 1f + 0.07f * s;
-                p.mouth = s;
-                p.armL = -52f * s;
-                p.armR = 52f * s;
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    /** 动作的进出包络：开头淡入、结尾淡出，中间为 1。 */
-    private static float envelope(float f, float in, float outStart) {
-        if (f < in) return f / in;
-        if (f > outStart) return Math.max(0f, (1f - f) / (1f - outStart));
-        return 1f;
-    }
-
-    /** 按时间推进待机小动作与眨眼。 */
-    private void schedule(long now) {
-        if (!animated) return;
-        if (nextIdleAt == 0) nextIdleAt = now + 2500 + random.nextInt(3000);
-        if (now >= nextIdleAt && now >= actionEnd) {
-            PetAction[] pool = PetAction.idlePool();
-            play(pool[random.nextInt(pool.length)]);
-            nextIdleAt = now + 3500 + random.nextInt(4000);
-        }
-        if (blinkAt == 0) blinkAt = now + 1500 + random.nextInt(3000);
-        if (now >= blinkAt && blinkUntil <= now) {
-            blinkUntil = now + 150;
-            blinkAt = now + 2200 + random.nextInt(3800);
-        }
+        scaledFor = -1;   // 尺寸变了，预缩放作废
+        scaled = null;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        if (source == null) return;
+
+        final int w = getWidth();
+        final int h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        ensureScaled(w);
+
         long now = System.currentTimeMillis();
-        schedule(now);
-        float S = Math.min(getWidth(), getHeight());
-        if (S <= 0) return;
-        if (bodyGradient == null) {
-            bodyGradient = new LinearGradient(0, 0, 0, S, 0xFF74A2D8, 0xFF3B63A4, Shader.TileMode.CLAMP);
-            bodyPaint.setShader(bodyGradient);
-        }
-        Pose p = poseAt(now);
+        if (nextIdleAt == 0) nextIdleAt = now + IDLE_MIN_MS + random.nextInt(1200);
+
+        computePose(now);
+
+        // 地面支点：角色脚底站在这里
+        float groundY = h * 0.97f;
+        float cx = w * 0.5f;
+        float dw = scaled.getWidth();
+        float dh = scaled.getHeight();
+
+        // 地面投影：抬得越高，影子越小越淡
+        float lift = Math.max(0f, -pose.dy) * w;
+        float base = w * 0.34f * pose.sx;
+        float shrink = Math.max(0.35f, 1f - lift / (w * 0.55f));
+        float sw = base * shrink;
+        float sh = Math.max(3f, h * 0.035f * shrink);
+        shadowRect.set(cx - sw / 2f, groundY - sh / 2f, cx + sw / 2f, groundY + sh / 2f);
+        shadowPaint.setAlpha((int) (0x42 * shrink));
+        canvas.drawOval(shadowRect, shadowPaint);
 
         canvas.save();
-        canvas.translate((getWidth() - S) / 2f, (getHeight() - S) / 2f);
-        canvas.translate(p.rootDx * S, p.rootDy * S);
-        canvas.rotate(p.tilt, 0.5f * S, 0.94f * S);
-
-        drawTail(canvas, S, p);
-        drawFeet(canvas, S);
-        drawBody(canvas, S, p);
-        drawArms(canvas, S, p);
-
+        canvas.translate(cx + pose.dx * w, groundY + pose.dy * w);
+        if (pose.rot != 0f) {
+            // 自转绕贴图中心（绕脚底转会甩出视图），倾斜仍绕脚底，重心才稳
+            float py = -dh * pose.pivotY;
+            canvas.translate(0f, py);
+            canvas.rotate(pose.rot);
+            canvas.translate(0f, -py);
+        }
+        if (pose.sx != 1f || pose.sy != 1f) canvas.scale(pose.sx, pose.sy);
+        dst.set(-dw / 2f, -dh, dw / 2f, 0f);
+        canvas.drawBitmap(scaled, null, dst, bitmapPaint);
         canvas.restore();
 
-        // 省电：限到 30fps，动画看不出差别，重绘次数少一半
         if (animated && isShown()) {
             postInvalidateDelayed(FRAME_MS);
         }
     }
 
-    // ---------------- 各部件 ----------------
-
-    private void drawTail(Canvas canvas, float S, Pose p) {
-        canvas.save();
-        canvas.translate(0.5f * S, 0.84f * S);
-        canvas.rotate(p.tail);
-        path.reset();
-        path.moveTo(0, -0.02f * S);
-        path.quadTo(-0.16f * S, 0.02f * S, -0.20f * S, 0.13f * S);
-        path.quadTo(-0.10f * S, 0.11f * S, 0, 0.11f * S);
-        path.quadTo(0.10f * S, 0.11f * S, 0.20f * S, 0.13f * S);
-        path.quadTo(0.16f * S, 0.02f * S, 0, -0.02f * S);
-        path.close();
-        canvas.drawPath(path, bodyPaint);
-        canvas.drawPath(path, strokePaint);
-        canvas.restore();
+    /** 尺寸变了才重建缩放缓存，避免每帧用 shader 采样导致边缘发虚。 */
+    private void ensureScaled(int viewW) {
+        int target = Math.max(48, Math.round(viewW * FIT));
+        if (scaled != null && scaledFor == target) return;
+        float k = target / (float) source.getWidth();
+        int tw = target;
+        int th = Math.max(1, Math.round(source.getHeight() * k));
+        // 只在缩小时预缩放，放大会保留原图质量
+        if (tw <= source.getWidth()) {
+            Bitmap b = Bitmap.createScaledBitmap(source, tw, th, true);
+            if (scaled != null && scaled != b && !scaled.isRecycled()) scaled.recycle();
+            scaled = b;
+        } else {
+            scaled = source;
+        }
+        scaledFor = target;
     }
 
-    private void drawFeet(Canvas canvas, float S) {
-        oval.set(0.325f * S, 0.855f * S, 0.465f * S, 0.945f * S);
-        canvas.drawOval(oval, bodyPaint);
-        canvas.drawOval(oval, strokePaint);
-        oval.set(0.535f * S, 0.855f * S, 0.675f * S, 0.945f * S);
-        canvas.drawOval(oval, bodyPaint);
-        canvas.drawOval(oval, strokePaint);
-    }
+    /** 把当前动作换算成这一帧的姿态。 */
+    private void computePose(long now) {
+        pose.dx = 0f;
+        pose.dy = 0f;
+        pose.rot = 0f;
+        pose.sx = 1f;
+        pose.sy = 1f;
+        pose.pivotY = 0f;
 
-    private void drawBody(Canvas canvas, float S, Pose p) {
-        float cx = 0.5f * S, cy = 0.58f * S;
-        float rx = 0.40f * S, ry = 0.30f * S;
-        canvas.save();
-        canvas.scale(p.bodySx, p.bodySy, cx, cy);
+        float t = now / 1000f;
+        // 基础呼吸：即使静止也在轻轻起伏，避免看起来是张死图
+        float breathe = (float) Math.sin(t * 2.0f * Math.PI / 2.9f);
+        pose.sy *= 1f + 0.010f * breathe;
+        pose.dy -= 0.006f * (1f + breathe);
 
-        oval.set(cx - rx, cy - ry, cx + rx, cy + ry);
-        canvas.drawOval(oval, bodyPaint);
-        canvas.drawOval(oval, strokePaint);
-
-        // 头顶小水柱
-        mouthPaint.setColor(0xFF6EA8E8);
-        oval.set(0.465f * S, 0.215f * S, 0.535f * S, 0.295f * S);
-        canvas.drawArc(oval, 200, 140, false, mouthPaint);
-        mouthPaint.setColor(0xFF2C3E63);
-
-        // 肚皮
-        oval.set(cx - 0.275f * S, cy - 0.155f * S, cx + 0.275f * S, cy + 0.270f * S);
-        canvas.drawOval(oval, whitePaint);
-
-        // 腮红
-        blushPaint.setAlpha(Math.min(255, (int) (0x3D * Math.min(2f, p.blush))));
-        oval.set(cx - 0.28f * S, cy - 0.005f * S, cx - 0.13f * S, cy + 0.070f * S);
-        canvas.drawOval(oval, blushPaint);
-        oval.set(cx + 0.13f * S, cy - 0.005f * S, cx + 0.28f * S, cy + 0.070f * S);
-        canvas.drawOval(oval, blushPaint);
-
-        drawEye(canvas, S, cx - 0.125f * S, cy - 0.062f * S, p);
-        drawEye(canvas, S, cx + 0.125f * S, cy - 0.062f * S, p);
-
-        // 嘴
-        float mw = 0.055f * S + 0.05f * S * p.mouth;
-        oval.set(cx - mw, cy + 0.045f * S, cx + mw, cy + 0.100f * S);
-        canvas.drawArc(oval, 0, 180, false, mouthPaint);
-
-        canvas.restore();
-    }
-
-    /** 一只眼睛：眼白底 + 眼珠 + 高光；闭眼时画成一条弧线。 */
-    private void drawEye(Canvas canvas, float S, float ex, float ey, Pose p) {
-        float r = 0.056f * S;
-        if (p.eyeOpen < 0.14f) {
-            oval.set(ex - r, ey - r * 0.9f, ex + r, ey + r * 0.9f);
-            canvas.drawArc(oval, 200, 140, false, mouthPaint);
+        if (!animated) {
+            pose.sx = 1f;
+            pose.sy = 1f;
+            pose.dy = 0f;
             return;
         }
-        canvas.save();
-        canvas.scale(1f, p.eyeOpen, ex, ey);
-        whitePaint.setColor(0xFFFFFFFF);
-        oval.set(ex - r, ey - r, ex + r, ey + r);
-        canvas.drawOval(oval, whitePaint);
-        whitePaint.setColor(0xFFF2F6FC);
-        float px = ex + p.pupilDx * S;
-        oval.set(px - r * 0.62f, ey - r * 0.66f + 0.004f * S, px + r * 0.62f, ey + r * 0.66f + 0.004f * S);
-        canvas.drawOval(oval, eyePaint);
-        oval.set(px - r * 0.42f, ey - r * 0.5f, px - r * 0.02f, ey - r * 0.08f);
-        canvas.drawOval(oval, highlightPaint);
-        canvas.restore();
-    }
 
-    private void drawArms(Canvas canvas, float S, Pose p) {
-        drawFlipper(canvas, S, 0.120f * S, 0.555f * S, p.armL, -1f);
-        drawFlipper(canvas, S, 0.880f * S, 0.555f * S, p.armR, 1f);
-    }
+        if (action == PetAction.IDLE || now >= actionEnd) {
+            if (action != PetAction.IDLE) {
+                action = PetAction.IDLE;
+            }
+            if (now >= nextIdleAt) {
+                PetAction[] pool = PetAction.idlePool();
+                play(pool[random.nextInt(pool.length)]);
+                nextIdleAt = now + IDLE_MIN_MS + random.nextInt((int) (IDLE_MAX_MS - IDLE_MIN_MS));
+            }
+            return;
+        }
 
-    /** 一只胸鳍：肩点是旋转轴，鳍身朝下（角度 0），正角度往外/往上摆。 */
-    private void drawFlipper(Canvas canvas, float S, float sx, float sy, float angle, float dir) {
-        canvas.save();
-        canvas.translate(sx, sy);
-        canvas.rotate(angle * dir);
-        path.reset();
-        path.moveTo(0, 0);
-        path.quadTo(dir * 0.075f * S, 0.06f * S, dir * 0.085f * S, 0.185f * S);
-        path.quadTo(dir * 0.045f * S, 0.155f * S, 0, 0.155f * S);
-        path.quadTo(-dir * 0.045f * S, 0.185f * S, -dir * 0.05f * S, 0.10f * S);
-        path.quadTo(-dir * 0.03f * S, 0.03f * S, 0, 0);
-        path.close();
-        canvas.drawPath(path, bodyPaint);
-        canvas.drawPath(path, strokePaint);
-        canvas.restore();
+        float f = (now - actionStart) / (float) Math.max(1L, action.duration());
+        f = Math.max(0f, Math.min(1f, f));
+        switch (action) {
+            case FLOAT: {
+                float s = (float) Math.sin(f * 2f * (float) Math.PI);
+                pose.dy -= 0.05f * s;
+                pose.sy *= 1f + 0.02f * s;
+                break;
+            }
+            case BOUNCE: {
+                // 前半段上升，后半段落下并在落地时挤压
+                float up = f < 0.45f ? f / 0.45f : (1f - f) / 0.55f;
+                float hgt = (float) Math.sin(Math.min(1f, up) * Math.PI / 2f);
+                pose.dy -= 0.16f * hgt;
+                if (f > 0.88f) {
+                    float k = (f - 0.88f) / 0.12f;
+                    pose.sy *= 1f - 0.12f * (1f - k);
+                    pose.sx *= 1f + 0.09f * (1f - k);
+                }
+                break;
+            }
+            case SWAY: {
+                pose.rot = 5f * (float) Math.sin(f * 3f * Math.PI);
+                pose.dx = 0.012f * (float) Math.sin(f * 3f * Math.PI);
+                break;
+            }
+            case LEAN: {
+                // 歪过去，停一会儿，再回来
+                float k = f < 0.25f ? f / 0.25f : (f > 0.75f ? (1f - f) / 0.25f : 1f);
+                pose.rot = 10f * k;
+                pose.dx = 0.012f * k;
+                break;
+            }
+            case SHAKE: {
+                pose.rot = 7f * (float) Math.sin(f * 6f * Math.PI) * (1f - f);
+                break;
+            }
+            case NOD: {
+                float k = (float) Math.sin(f * 2f * Math.PI);
+                pose.dy += 0.028f * Math.max(0f, k);
+                pose.sy *= 1f - 0.02f * Math.max(0f, k);
+                break;
+            }
+            case SPIN: {
+                float e = f * f * (3f - 2f * f);   // 缓入缓出
+                pose.rot = 360f * e;
+                pose.pivotY = 0.5f;                // 原地转圈：绕贴图中心
+                pose.dy -= 0.06f * (float) Math.sin(f * Math.PI);
+                break;
+            }
+            case STRETCH: {
+                float k = f < 0.4f ? f / 0.4f : (f > 0.7f ? (1f - f) / 0.3f : 1f);
+                pose.sy *= 1f + 0.10f * k;
+                pose.sx *= 1f - 0.06f * k;
+                pose.dy -= 0.03f * k;
+                break;
+            }
+            case DUCK: {
+                float k = f < 0.35f ? f / 0.35f : (f > 0.7f ? (1f - f) / 0.3f : 1f);
+                pose.sy *= 1f - 0.09f * k;
+                pose.sx *= 1f + 0.06f * k;
+                break;
+            }
+            case POP: {
+                // 快速弹一下：先缩后弹
+                float k = f < 0.3f ? -0.6f * (1f - f / 0.3f) : (float) Math.sin((f - 0.3f) / 0.7f * Math.PI);
+                pose.sy *= 1f + 0.14f * k;
+                pose.sx *= 1f - 0.10f * k;
+                pose.dy -= 0.05f * Math.max(0f, k);
+                break;
+            }
+            case SLEEPY: {
+                float k = (float) Math.sin(f * Math.PI);
+                pose.dy += 0.035f * k;
+                pose.sy *= 1f - 0.04f * k;
+                pose.rot = 5f * k;
+                break;
+            }
+            default:
+                break;
+        }
+        // 统一兜底：任何动作都不许把贴图甩出视图
+        if (pose.rot > MAX_TILT && pose.rot < 360f - MAX_TILT && pose.pivotY == 0f) {
+            pose.rot = Math.max(-MAX_TILT, Math.min(MAX_TILT, pose.rot));
+        }
     }
 }

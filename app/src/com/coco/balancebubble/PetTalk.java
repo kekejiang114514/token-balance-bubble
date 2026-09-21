@@ -3,69 +3,72 @@ package com.coco.balancebubble;
 import java.util.Random;
 
 /**
- * 桌宠的卖萌语料库。
+ * 一张图文案，附带它说出口时角色要做的动作。
  *
- * <p>每句话都配了一个动作，说话时同步播放，这样角色是一边做动作一边说话，
- * 而不是干站着冒文字。句子控制在 12 个字以内，保证气泡最多折两行。
+ * <p>语料和动作写在一起，改文案时顺手就能改动作，不会出现「文案改了动作没跟上」。
  */
-public class PetTalk {
+public final class PetTalk {
 
-    private static final Random RANDOM = new Random();
-    private static int lastIndex = -1;
-
-    /** 一句话＋它的配套动作。 */
-    public static class Line {
+    /** 一句台词。 */
+    public static final class Line {
         public final String text;
         public final PetAction action;
 
-        public Line(String text, PetAction action) {
+        Line(String text, PetAction action) {
             this.text = text;
             this.action = action;
         }
     }
 
     private static final Line[] LINES = {
-            new Line("主人来啦～", PetAction.WAVE),
-            new Line("咕噜咕噜…吐泡泡", PetAction.SWIM),
-            new Line("今天也元气满满！", PetAction.HAPPY),
-            new Line("摸摸头～", PetAction.NOD),
-            new Line("在忙什么呀？", PetAction.LOOK),
-            new Line("一直在等你哦", PetAction.LOOK),
-            new Line("最喜欢主人了", PetAction.HAPPY),
-            new Line("一起去看海吧？", PetAction.SWIM),
-            new Line("陪我一会儿嘛～", PetAction.WAVE),
-            new Line("记得喝水哦", PetAction.NOD),
-            new Line("甩甩尾巴～", PetAction.SWIM),
-            new Line("别老盯着屏幕", PetAction.SHAKE),
-            new Line("给你好运 buff！", PetAction.HAPPY),
-            new Line("被我抓到偷看啦", PetAction.SURPRISE),
-            new Line("大海不如你好看", PetAction.HAPPY),
-            new Line("辛苦啦，歇会儿", PetAction.NOD),
-            new Line("这是我们的秘密", PetAction.NOD),
-            new Line("哗啦哗啦～水花", PetAction.SWIM),
-            new Line("累了就靠着我", PetAction.SLEEPY),
-            new Line("想听我唱歌吗？", PetAction.WAVE),
-            new Line("转圈圈…好晕呀", PetAction.SHAKE),
-            new Line("你的心情最重要", PetAction.HAPPY),
-            new Line("呜哇！吓到了吗？", PetAction.SURPRISE),
-            new Line("陪你到天亮～", PetAction.SLEEPY),
-            new Line("账单一读就跳起来", PetAction.JUMP),
-            new Line("跳一下给你看", PetAction.JUMP),
+            new Line("今天也要加油鸭！", PetAction.BOUNCE),
+            new Line("你在忙什么呀？", PetAction.LEAN),
+            new Line("摸摸头～", PetAction.DUCK),
+            new Line("呜哇！吓到了吗？", PetAction.POP),
+            new Line("休息一下吧～", PetAction.SLEEPY),
+            new Line("我一直在这里哦。", PetAction.FLOAT),
+            new Line("要不要喝口水？", PetAction.LEAN),
+            new Line("海浪的声音好好听。", PetAction.SWAY),
+            new Line("困了…睡一会儿…", PetAction.SLEEPY),
+            new Line("记账记得看看哦！", PetAction.NOD),
+            new Line("一起去看海吧？", PetAction.FLOAT),
+            new Line("今天过得怎么样？", PetAction.LEAN),
+            new Line("诶嘿～", PetAction.BOUNCE),
+            new Line("我转一圈给你看！", PetAction.SPIN),
+            new Line("别熬太晚啦。", PetAction.SHAKE),
+            new Line("有好好吃饭吗？", PetAction.LEAN),
+            new Line("我在水面漂着呢～", PetAction.FLOAT),
+            new Line("要不要抱一下？", PetAction.STRETCH),
+            new Line("嘿嘿，被发现了。", PetAction.POP),
+            new Line("今天的花销记了吗？", PetAction.NOD),
+            new Line("呜…有点冷。", PetAction.DUCK),
+            new Line("慢慢来就好。", PetAction.SWAY),
+            new Line("我超喜欢你的！", PetAction.BOUNCE),
+            new Line("又见面啦～", PetAction.POP),
     };
 
-    /** 供外部（设置页预览、单测）读取全部语料。 */
+    private static final Random RANDOM = new Random();
+    private static int lastIndex = -1;
+
+    private PetTalk() {
+    }
+
+    /** 全部台词（测试用）。 */
     public static Line[] all() {
         return LINES.clone();
     }
 
-    /** 随机取一条，不会和上一条重复。 */
+    public static int size() {
+        return LINES.length;
+    }
+
+    /** 随机一句，尽量避免和上一句重复。 */
     public static Line random() {
-        if (LINES.length == 0) return new Line("", PetAction.IDLE);
-        if (LINES.length == 1) return LINES[0];
-        int i;
-        do {
-            i = RANDOM.nextInt(LINES.length);
-        } while (i == lastIndex);
+        if (LINES.length == 0) return null;
+        int i = RANDOM.nextInt(LINES.length);
+        if (LINES.length > 1 && i == lastIndex) {
+            i = (i + 1 + RANDOM.nextInt(LINES.length - 2)) % LINES.length;
+        }
         lastIndex = i;
         return LINES[i];
     }

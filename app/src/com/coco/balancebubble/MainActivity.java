@@ -749,7 +749,8 @@ public class MainActivity extends Activity {
 
         if (previewChar != null) {
             int w = ui.dp(sizeDp());
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, w);
+            int hh = (int) (w * PetView.VIEW_H_RATIO);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, hh);
             lp.topMargin = ui.dp(4);
             previewChar.setLayoutParams(lp);
             previewChar.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
