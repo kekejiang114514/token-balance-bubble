@@ -68,8 +68,8 @@ def main():
 
     root = E('manifest', attrs=[
         A(None, 'package', TYPE_STR, 'com.coco.balancebubble'),
-        an('versionCode', TYPE_INT_DEC, 4),
-        an('versionName', TYPE_STR, '1.3'),
+        an('versionCode', TYPE_INT_DEC, 5),
+        an('versionName', TYPE_STR, '1.4'),
     ], children=[
         E('uses-sdk', attrs=[
             an('minSdkVersion', TYPE_INT_DEC, 23),

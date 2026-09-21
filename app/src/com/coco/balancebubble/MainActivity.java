@@ -3,13 +3,13 @@ package com.coco.balancebubble;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
@@ -17,15 +17,12 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.EditText;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
-
-import java.io.InputStream;
 
 /**
  * 设置界面。没有 aapt2，所有控件都在代码里搭，样式统一走 {@link Ui}。
@@ -44,20 +41,34 @@ public class MainActivity extends Activity {
 
     private LinearLayout body, advancedBox, statusBox, sizeBlock;
     private TextView advToggle, tvStatus, tvRaw, tvRawToggle, tvPreset, tvSizeVal;
-    private TextView pillChar, pillCode, tvEye, pillToken;
-    private Spinner spProvider, spCurrency, spInterval;
+    private TextView pillChar, pillCode, pillAnim, tvEye, tvModeDesc;
+    private Spinner spProvider, spCurrency, spInterval, spMode;
     private EditText etKey, etLabel, etBase, etPath, etExtract, etHeader, etPrefix, etCustom;
     private SeekBar sbSize;
     private TextView btnRun, btnStop, btnTest;
     private BubbleView preview;
-    private ImageView previewChar;
-    private Bitmap charBmp;
+    private PetView previewChar;
 
     private boolean filling = false;   // 程序化赋值期间忽略监听
     private boolean testing = false;
     private boolean showCharValue = true;
     private boolean showCodeValue = false;
-    private boolean tokenEnabledValue = true;
+    private boolean animateValue = true;
+    private int modeValue = Prefs.MODE_MIXED;
+
+    /** 预览里的角色也要自己动起来，让用户看到动作效果。 */
+    private final Handler previewHandler = new Handler(Looper.getMainLooper());
+    private final Runnable previewTick = new Runnable() {
+        @Override
+        public void run() {
+            if (previewChar != null && animateValue
+                    && previewChar.getVisibility() == View.VISIBLE) {
+                PetAction[] pool = PetAction.idlePool();
+                previewChar.play(pool[(int) (Math.random() * pool.length)]);
+            }
+            previewHandler.postDelayed(this, 2800);
+        }
+    };
 
     // ================= 生命周期 =================
 
@@ -73,7 +84,6 @@ public class MainActivity extends Activity {
         sv.addView(body, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(sv);
-        charBmp = loadChar();
         buildUi();
         load();
     }
@@ -83,6 +93,14 @@ public class MainActivity extends Activity {
         super.onResume();
         updateUi();
         updatePreview();
+        previewHandler.removeCallbacks(previewTick);
+        previewHandler.postDelayed(previewTick, 1500);
+    }
+
+    @Override
+    protected void onPause() {
+        previewHandler.removeCallbacks(previewTick);
+        super.onPause();
     }
 
     // ================= 界面搭建 =================
@@ -278,28 +296,24 @@ public class MainActivity extends Activity {
         LinearLayout c = ui.card();
         c.addView(ui.cardTitle("③ 模式与显示"));
 
-        LinearLayout modeRow = new LinearLayout(this);
-        modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams mrp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        mrp.topMargin = ui.dp(12);
-        modeRow.setLayoutParams(mrp);
-        modeRow.addView(ui.text("token 查询模式", 13.2f, Ui.TXT),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pillToken = pill();
-        pillToken.setOnClickListener(new View.OnClickListener() {
+        c.addView(ui.label("运行模式"));
+        spMode = ui.spinner(Prefs.MODE_NAMES);
+        c.addView(spMode);
+        tvModeDesc = ui.hint(Prefs.MODE_DESC[Prefs.MODE_MIXED]);
+        c.addView(tvModeDesc);
+        spMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
-            public void onClick(View v) {
-                tokenEnabledValue = !tokenEnabledValue;
-                renderToggles();
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                modeValue = Prefs.clampMode(pos);
+                renderModeDesc();
+                if (filling) return;
                 applyModeChange();
             }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> p) {
+            }
         });
-        modeRow.addView(pillToken);
-        c.addView(modeRow);
-        c.addView(ui.hint("开着＝点角色查余额，气泡里会先显示「正在刷新中…」。"
-                + "关掉＝只当桌宠，点角色随机说句卖萌话，而且每分钟自动冒一句。"));
 
         c.addView(ui.divider());
 
@@ -363,6 +377,29 @@ public class MainActivity extends Activity {
         c.addView(charRow);
         c.addView(ui.hint("关掉就只留一个气泡，适合不想让角色挡视线的时候。"));
 
+        LinearLayout animRow = new LinearLayout(this);
+        animRow.setOrientation(LinearLayout.HORIZONTAL);
+        animRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams arp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        arp.topMargin = ui.dp(13);
+        animRow.setLayoutParams(arp);
+        animRow.addView(ui.text("角色动作", 13.2f, Ui.TXT),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pillAnim = pill();
+        pillAnim.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                animateValue = !animateValue;
+                renderToggles();
+                updatePreview();
+            }
+        });
+        animRow.addView(pillAnim);
+        c.addView(animRow);
+        c.addView(ui.hint("角色是骨架式动画：会挥手、眨眼、甩尾巴、蹦跳、打瞌睡，"
+                + "说话时会配合做动作。关掉就站着不动，可以省电。"));
+
         sizeBlock = new LinearLayout(this);
         sizeBlock.setOrientation(LinearLayout.VERTICAL);
         c.addView(sizeBlock);
@@ -420,7 +457,7 @@ public class MainActivity extends Activity {
 
         preview = new BubbleView(this);
         panel.addView(preview);
-        previewChar = new ImageView(this);
+        previewChar = new PetView(this);
         panel.addView(previewChar);
         c.addView(panel);
         return c;
@@ -640,20 +677,26 @@ public class MainActivity extends Activity {
             pillCode.setBackground(Ui.round(showCodeValue ? Ui.OK_BG : 0xFFF1F4F9,
                     ui.dp(20), ui.dp(1), showCodeValue ? 0xFFB6E2CC : Ui.LINE));
         }
-        if (pillToken != null) {
-            pillToken.setText(tokenEnabledValue ? "已开启" : "已关闭");
-            pillToken.setTextColor(tokenEnabledValue ? Ui.OK : Ui.SUB);
-            pillToken.setBackground(Ui.round(tokenEnabledValue ? Ui.OK_BG : 0xFFF1F4F9,
-                    ui.dp(20), ui.dp(1), tokenEnabledValue ? 0xFFB6E2CC : Ui.LINE));
+        if (pillAnim != null) {
+            pillAnim.setText(animateValue ? "已开启" : "已关闭");
+            pillAnim.setTextColor(animateValue ? Ui.OK : Ui.SUB);
+            pillAnim.setBackground(Ui.round(animateValue ? Ui.OK_BG : 0xFFF1F4F9,
+                    ui.dp(20), ui.dp(1), animateValue ? 0xFFB6E2CC : Ui.LINE));
         }
         if (sizeBlock != null) {
             sizeBlock.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
         }
     }
 
+    /** 模式说明跟着下拉框走。 */
+    private void renderModeDesc() {
+        if (tvModeDesc != null) tvModeDesc.setText(Prefs.MODE_DESC[Prefs.clampMode(modeValue)]);
+    }
+
     /** 模式改了立刻生效：服务在跑就让它重排定时任务。 */
     private void applyModeChange() {
-        Prefs.setTokenEnabled(this, tokenEnabledValue);
+        Prefs.setMode(this, modeValue);
+        Prefs.setAnimate(this, animateValue);
         if (!Prefs.running(this)) return;
         Intent i = new Intent(this, BubbleService.class);
         i.setAction(BubbleService.ACTION_START);
@@ -705,26 +748,12 @@ public class MainActivity extends Activity {
         preview.setData(label, sym + "33.83" + Currencies.suffix(code, showCodeValue), false);
 
         if (previewChar != null) {
-            if (charBmp != null) {
-                int w = ui.dp(sizeDp());
-                int h = Math.max(1, w * charBmp.getHeight() / charBmp.getWidth());
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
-                lp.topMargin = -ui.dp(10);
-                previewChar.setLayoutParams(lp);
-                previewChar.setImageBitmap(charBmp);
-            }
+            int w = ui.dp(sizeDp());
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, w);
+            lp.topMargin = ui.dp(4);
+            previewChar.setLayoutParams(lp);
             previewChar.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private Bitmap loadChar() {
-        try {
-            InputStream is = getAssets().open("char.png");
-            Bitmap b = BitmapFactory.decodeStream(is);
-            is.close();
-            return b;
-        } catch (Exception e) {
-            return null;
+            previewChar.setAnimated(animateValue);
         }
     }
 
@@ -778,7 +807,9 @@ public class MainActivity extends Activity {
         spInterval.setSelection(intervalIndex(d.interval));
         showCharValue = d.showChar;
         showCodeValue = d.showCode;
-        tokenEnabledValue = d.tokenEnabled;
+        modeValue = d.mode;
+        animateValue = d.animate;
+        if (spMode != null) spMode.setSelection(modeValue);
         sbSize.setProgress(sizeProgress(d.charSize));
         tvSizeVal.setText(d.charSize + " dp");
         filling = false;
@@ -804,7 +835,8 @@ public class MainActivity extends Activity {
         d.charSize = sizeDp();
         d.showChar = showCharValue;
         d.showCode = showCodeValue;
-        d.tokenEnabled = tokenEnabledValue;
+        d.mode = modeValue;
+        d.animate = animateValue;
         return d;
     }
 

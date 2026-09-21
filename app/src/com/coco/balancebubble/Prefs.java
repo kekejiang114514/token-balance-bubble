@@ -46,8 +46,10 @@ public class Prefs {
         public int charSize = 96;
         public boolean showChar = true;
         public boolean showCode = false;
-        /** true = token 查询模式；false = 纯桌宠模式 */
-        public boolean tokenEnabled = true;
+        /** 三种模式：MODE_TOKEN / MODE_PET / MODE_MIXED */
+        public int mode = MODE_MIXED;
+        /** 角色是否播放骨架动作 */
+        public boolean animate = true;
 
         public boolean configured() {
             return base != null && !base.trim().isEmpty() && key != null && !key.trim().isEmpty();
@@ -70,7 +72,8 @@ public class Prefs {
         d.charSize = charSize(c);
         d.showChar = showChar(c);
         d.showCode = showCode(c);
-        d.tokenEnabled = tokenEnabled(c);
+        d.mode = mode(c);
+        d.animate = animate(c);
         return d;
     }
 
@@ -90,7 +93,8 @@ public class Prefs {
                 .putInt("charsize", clampCharSize(d.charSize))
                 .putBoolean("showchar", d.showChar)
                 .putBoolean("showcode", d.showCode)
-                .putBoolean("tokenenabled", d.tokenEnabled)
+                .putInt("mode", clampMode(d.mode))
+                .putBoolean("animate", d.animate)
                 .apply();
     }
 
@@ -132,11 +136,62 @@ public class Prefs {
 
     public static int interval(Context c) { return clampInterval(i(c, "interval", 5)); }
 
-    /** token 查询模式：开着才查余额，关掉就只当桌宠。 */
-    public static boolean tokenEnabled(Context c) { return b(c, "tokenenabled", true); }
+    // ---------------- 模式 ----------------
 
-    public static void setTokenEnabled(Context c, boolean v) {
-        get(c).edit().putBoolean("tokenenabled", v).apply();
+    /** 只查余额：定时静默刷新，点角色弹气泡。 */
+    public static final int MODE_TOKEN = 0;
+    /** 只当桌宠：不查余额，定时说话做动作。 */
+    public static final int MODE_PET = 1;
+    /** 混合：定时静默查余额＋定时说话做动作，余额变了会主动冒泡。 */
+    public static final int MODE_MIXED = 2;
+
+    public static final String[] MODE_NAMES = {
+            "仅 token 查询", "仅桌宠", "混合模式（推荐）"};
+
+    public static final String[] MODE_DESC = {
+            "定时静默刷新余额，点角色立刻查询并把气泡弹出来。",
+            "完全不查余额，点角色随机说句卖萌话并做动作，每分钟自动来一次。",
+            "后台定时静默查余额，同时保留桌宠的说话与动作；点角色＝查余额，"
+                    + "余额有变化时它会主动冒个泡提醒你。"};
+
+    public static int clampMode(int v) {
+        return (v == MODE_TOKEN || v == MODE_PET || v == MODE_MIXED) ? v : MODE_MIXED;
+    }
+
+    /**
+     * 当前模式。
+     *
+     * <p>老版本只有「token 查询模式」开关，这里做一次兼容：开＝仅查询，关＝仅桌宠。
+     */
+    public static int mode(Context c) {
+        if (get(c).contains("mode")) return clampMode(i(c, "mode", MODE_MIXED));
+        if (get(c).contains("tokenenabled")) {
+            return b(c, "tokenenabled", true) ? MODE_TOKEN : MODE_PET;
+        }
+        return MODE_MIXED;
+    }
+
+    public static void setMode(Context c, int v) {
+        get(c).edit().putInt("mode", clampMode(v)).apply();
+    }
+
+    /** 这个模式下要不要查余额。 */
+    public static boolean queriesBalance(Context c) {
+        int m = mode(c);
+        return m == MODE_TOKEN || m == MODE_MIXED;
+    }
+
+    /** 这个模式下要不要定时说话做动作。 */
+    public static boolean speaks(Context c) {
+        int m = mode(c);
+        return m == MODE_PET || m == MODE_MIXED;
+    }
+
+    /** 角色是否播放骨架动作。 */
+    public static boolean animate(Context c) { return b(c, "animate", true); }
+
+    public static void setAnimate(Context c, boolean v) {
+        get(c).edit().putBoolean("animate", v).apply();
     }
     public static boolean showChar(Context c) { return b(c, "showchar", true); }
     public static void setShowChar(Context c, boolean v) {
