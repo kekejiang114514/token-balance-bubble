@@ -4,7 +4,8 @@ package com.coco.balancebubble;
  * 角色动作清单。
  *
  * <p>纯逻辑，不依赖 Android，方便单测覆盖（时长、待机池等）。
- * 角色是一张整图，所以动作都是整体姿态：位移、旋转、缩放。
+ * 角色是一张整图：整体姿态（位移、旋转、缩放）由动作表驱动，
+ * 局部形变（眨眼、发丝随风、甩尾、挥手）由 {@link PartRig} 的网格负责。
  */
 public enum PetAction {
 
@@ -31,7 +32,11 @@ public enum PetAction {
     /** 弹一下（被吓到）。 */
     POP(700L),
     /** 打瞌睡：慢慢下沉＋轻轻歪。 */
-    SLEEPY(3000L);
+    SLEEPY(3000L),
+    /** 甩尾：两侧长发左右摆动（局部形变，不是整体旋转）。 */
+    WAG(1500L),
+    /** 挥手：右臂绕腕点转动。 */
+    WAVE(1600L);
 
     private final long ms;
 
@@ -46,7 +51,7 @@ public enum PetAction {
 
     /** 待机时随机挑动作的池子（不含 IDLE，也不要太闹的 SPIN）。 */
     public static PetAction[] idlePool() {
-        return new PetAction[]{FLOAT, SWAY, LEAN, NOD, BOUNCE, STRETCH, DUCK, SLEEPY};
+        return new PetAction[]{FLOAT, SWAY, LEAN, NOD, BOUNCE, STRETCH, DUCK, SLEEPY, WAG, WAVE};
     }
 
     /** 动作数量（不含 IDLE）。 */

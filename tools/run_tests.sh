@@ -13,10 +13,11 @@ javac -nowarn -encoding UTF-8 -source 8 -target 8 -d $OUT \
   app/src/com/coco/balancebubble/PetAction.java \
   app/src/com/coco/balancebubble/PetTalk.java \
   app/src/com/coco/balancebubble/TextWrap.java \
-  test/CurrencyTest.java test/PetTalkTest.java test/TextWrapTest.java
+  app/src/com/coco/balancebubble/PartRig.java \
+  test/CurrencyTest.java test/PetTalkTest.java test/TextWrapTest.java test/PartRigTest.java
 
 failed=0
-for t in CurrencyTest PetTalkTest TextWrapTest; do
+for t in CurrencyTest PetTalkTest TextWrapTest PartRigTest; do
   echo "==================== $t ===================="
   if ! java -cp $OUT $t; then
     failed=1

@@ -45,6 +45,8 @@ public final class PetTalk {
             new Line("慢慢来就好。", PetAction.SWAY),
             new Line("我超喜欢你的！", PetAction.BOUNCE),
             new Line("又见面啦～", PetAction.POP),
+            new Line("尾巴摇摇～", PetAction.WAG),
+            new Line("挥挥小手～", PetAction.WAVE),
     };
 
     private static final Random RANDOM = new Random();

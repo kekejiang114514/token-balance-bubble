@@ -56,6 +56,9 @@ public class PetView extends View {
     private final Matrix matrix = new Matrix();
     private final Pose pose = new Pose();
     private final Random random = new Random();
+    private final PartRig rig = new PartRig();   // 局部形变：眨眼 / 甩尾 / 挥手 / 发丝
+    private PetAction rigAction = PetAction.IDLE;
+    private float rigProgress = -1f;             // <0 表示当前没有动作，只有待机驱动
 
     private Bitmap source;      // 原始贴图
     private Bitmap scaled;      // 按当前尺寸预缩放的贴图
@@ -161,7 +164,15 @@ public class PetView extends View {
         }
         if (pose.sx != 1f || pose.sy != 1f) canvas.scale(pose.sx, pose.sy);
         dst.set(-dw / 2f, -dh, dw / 2f, 0f);
-        canvas.drawBitmap(scaled, null, dst, bitmapPaint);
+        // 局部形变：眨眼、发丝随风、甩尾、挥手。静止时顶点几乎不动，走普通绘制。
+        rig.update(now, rigAction, rigProgress, animated);
+        float[] mesh = rig.vertices();
+        rig.fill(dst.left, dst.top, dw, dh, mesh);
+        if (rig.isNeutral()) {
+            canvas.drawBitmap(scaled, null, dst, bitmapPaint);
+        } else {
+            canvas.drawBitmapMesh(scaled, PartRig.MW, PartRig.MH, mesh, 0, null, 0, bitmapPaint);
+        }
         canvas.restore();
 
         if (animated && isShown()) {
@@ -195,6 +206,8 @@ public class PetView extends View {
         pose.sx = 1f;
         pose.sy = 1f;
         pose.pivotY = 0f;
+        rigAction = PetAction.IDLE;
+        rigProgress = -1f;
 
         float t = now / 1000f;
         // 基础呼吸：即使静止也在轻轻起伏，避免看起来是张死图
@@ -223,6 +236,8 @@ public class PetView extends View {
 
         float f = (now - actionStart) / (float) Math.max(1L, action.duration());
         f = Math.max(0f, Math.min(1f, f));
+        rigAction = action;
+        rigProgress = f;
         switch (action) {
             case FLOAT: {
                 float s = (float) Math.sin(f * 2f * (float) Math.PI);
