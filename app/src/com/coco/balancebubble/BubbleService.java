@@ -39,16 +39,17 @@ public class BubbleService extends Service {
     private static final String CH_ID = "bubble";
     private static final int NOTI_ID = 8848;
 
-    /** 结果出来后气泡停留多久再自动收起 */
+    /** 结果出来后气泡停留多久再自动收起的默认值（可在设置里改） */
     private static final long AUTO_HIDE_MS = 7000L;
-    /** 桌宠模式自动说话的间隔 */
-    private static final long PET_INTERVAL_MS = 60000L;
 
     private WindowManager wm;
     private WindowManager.LayoutParams lp;
     private FrameLayout root;
+    private LinearLayout column;
     private BubbleView bubble;
     private PetView charView;
+    /** 当前生效的气泡外观（设置页改完会重建） */
+    private BubbleStyle style;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private boolean refreshing = false;
@@ -93,7 +94,7 @@ public class BubbleService extends Service {
         if (root == null) {
             show();
         } else {
-            applyCharVisibility();
+            applyStyle();
             if (placed) root.post(new Runnable() {
                 @Override
                 public void run() {
@@ -144,21 +145,22 @@ public class BubbleService extends Service {
     private void show() {
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         root = new FrameLayout(this);
+        style = BubbleStyle.from(this);
 
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        bubble = new BubbleView(this);
+        bubble = new BubbleView(this, style);
         // 气泡平时收起：用 INVISIBLE 而不是 GONE，窗口尺寸保持恒定，
         // 弹出/收起时角色不会上下跳动。
         bubble.setVisibility(View.INVISIBLE);
-        col.addView(bubble);
 
         charView = new PetView(this);
         charView.setAnimated(Prefs.animate(this));
-        col.addView(charView, charParams());
-        root.addView(col);
+        charView.setIdleLevel(Prefs.petIdle(this));
+        layoutColumn();
+        root.addView(column);
 
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -232,18 +234,52 @@ public class BubbleService extends Service {
         int cw = (int) dp(Prefs.charSize(this));
         int ch = (int) (cw * PetView.VIEW_H_RATIO);
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(cw, ch);
-        cp.topMargin = (int) -dp(6);
+        // 角色和气泡贴紧一点：气泡在下时，往上收；气泡在上时，往下收。
+        boolean tailUp = style != null && style.tailUp;
+        if (tailUp) {
+            cp.topMargin = (int) -dp(10);
+        } else {
+            cp.topMargin = (int) -dp(6);
+        }
         return cp;
+    }
+
+    /**
+     * 按「尖角朝哪边」决定气泡在角色的上方还是下方。
+     *
+     * <p>气泡默认挂在角色头顶（尖角朝下、指着角色）；把「尖角朝上」打开后，
+     * 角色在上、气泡在下，适合把小鲸鱼放到屏幕上半部分的摆法。
+     */
+    private void layoutColumn() {
+        if (column == null || bubble == null || charView == null) return;
+        boolean tailUp = style != null && style.tailUp;
+        column.removeAllViews();
+        if (tailUp) {
+            column.addView(charView, charParams());
+            column.addView(bubble);
+        } else {
+            column.addView(bubble);
+            column.addView(charView, charParams());
+        }
+    }
+
+    /** 设置页改完外观后调用：重建样式并立刻套到已经挂着的视图上。 */
+    private void applyStyle() {
+        style = BubbleStyle.from(this);
+        if (bubble != null) bubble.applyStyle(style);
+        if (charView != null) {
+            charView.setAnimated(Prefs.animate(this));
+            charView.setIdleLevel(Prefs.petIdle(this));
+        }
+        layoutColumn();
+        applyCharVisibility();
     }
 
     private void applyCharVisibility() {
         if (charView == null) return;
         boolean show = Prefs.showChar(this);
         charView.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (show) {
-            charView.setLayoutParams(charParams());
-            charView.setAnimated(Prefs.animate(this));
-        }
+        charView.setLayoutParams(charParams());
     }
 
     /** 播放一个动作（角色关掉或动作开关关掉时什么也不做）。 */
@@ -264,16 +300,25 @@ public class BubbleService extends Service {
         if (line == null) return;
         playAction(line.action);
         if (bubble == null) return;
-        bubble.setAmountSize(phraseSize(line.text));
+        bubble.setAmountScale(phraseScale(line.text));
         bubble.setData("", line.text, false);
-        revealBubble(AUTO_HIDE_MS);
+        revealBubble(hideMs());
     }
 
-    /** 长句用稍小的基准字号，短句用大字号，气泡宽度本来就跟着文字走。 */
-    private float phraseSize(String text) {
+    /** 气泡停留时长（设置里可调）。 */
+    private long hideMs() {
+        return Prefs.bubbleHideMs(this);
+    }
+
+    /**
+     * 长句用稍小的基准字号，短句用大字号。气泡宽度本来就跟着文字走，
+     * 所以这里只是「语气」上的大小差别，不会改变能不能放下。
+     */
+    private float phraseScale(String text) {
         int n = text == null ? 0 : text.length();
-        if (n > 11) return dp(19);
-        return dp(22);
+        if (n > 26) return 0.72f;
+        if (n > 14) return 0.85f;
+        return 1f;
     }
 
     /** 弹出气泡，并在指定时长后自动收起。 */
@@ -296,12 +341,14 @@ public class BubbleService extends Service {
     private void showBusy() {
         if (bubble == null) return;
         ui.removeCallbacks(hideBubble);
-        bubble.setAmountSize(dp(18));
+        bubble.setAmountScale(0.82f);
         bubble.setData(balanceLabel(), "正在刷新中…", false);
         bubble.setVisibility(View.VISIBLE);
     }
 
+    /** 气泡第一行的小字：填了名字就是「xxx 余额」，没填就只显示金额。 */
     private String balanceLabel() {
+        if (!Prefs.showTitle(this)) return "";
         String name = Prefs.label(this).trim();
         return name.isEmpty() ? "" : name + " 余额";
     }
@@ -360,9 +407,9 @@ public class BubbleService extends Service {
         });
     }
 
-    /** 点一下：按模式决定是刷新余额还是说句卖萌话。 */
+    /** 点一下：具体干什么由设置里的「点击角色」决定。 */
     private void onTap(float rawX, float rawY) {
-        // 气泡正开着的时候，点气泡＝立刻收起。
+        // 气泡正开着的时候，点气泡＝立刻收起（这个不受设置影响，永远生效）。
         if (bubble != null && bubble.getVisibility() == View.VISIBLE && inside(bubble, rawX, rawY)) {
             ui.removeCallbacks(hideBubble);
             hideBubble.run();
@@ -370,13 +417,47 @@ public class BubbleService extends Service {
         }
         // 只有点在角色身上才算数（角色关掉时整个窗口都可以点）。
         if (!inside(charView, rawX, rawY)) return;
-        if (Prefs.queriesBalance(this)) {
-            // 混合模式点一下＝查余额；单 token 模式点一下也只是查余额。
-            playAction(Prefs.mode(this) == Prefs.MODE_MIXED ? PetAction.LEAN : PetAction.NOD);
-            refresh(true);
-        } else {
-            speak();
+        switch (Prefs.tapAction(this)) {
+            case Prefs.TAP_TALK:
+                speak();
+                break;
+            case Prefs.TAP_REFRESH:
+                playAction(PetAction.NOD);
+                refresh(true);
+                break;
+            case Prefs.TAP_BUBBLE:
+                toggleBubble();
+                break;
+            case Prefs.TAP_MODE:
+            default:
+                if (Prefs.queriesBalance(this)) {
+                    // 混合模式点一下＝查余额；单 token 模式点一下也只是查余额。
+                    playAction(Prefs.mode(this) == Prefs.MODE_MIXED ? PetAction.LEAN : PetAction.NOD);
+                    refresh(true);
+                } else {
+                    speak();
+                }
+                break;
         }
+    }
+
+    /** 点一下就把气泡翻出来 / 收回去。 */
+    private void toggleBubble() {
+        if (bubble == null) return;
+        if (bubble.getVisibility() == View.VISIBLE) {
+            ui.removeCallbacks(hideBubble);
+            hideBubble.run();
+            return;
+        }
+        String last = Prefs.lastAmount(this);
+        if (last == null || last.isEmpty() || "--".equals(last)) {
+            speak();
+            return;
+        }
+        playAction(PetAction.LEAN);
+        bubble.setAmountScale(1f);
+        bubble.setData(balanceLabel(), last, Prefs.lastError(this));
+        revealBubble(hideMs());
     }
 
     /** 判断触点是否落在某个视图上，留一点容差方便点中。 */
@@ -428,7 +509,18 @@ public class BubbleService extends Service {
         @Override
         public void run() {
             dragging = true;
-            openSettings();
+            switch (Prefs.longTapAction(BubbleService.this)) {
+                case Prefs.LONG_HIDE:
+                    ui.removeCallbacks(hideBubble);
+                    hideBubble.run();
+                    break;
+                case Prefs.LONG_NONE:
+                    break;
+                case Prefs.LONG_SETTINGS:
+                default:
+                    openSettings();
+                    break;
+            }
         }
     };
 
@@ -442,13 +534,15 @@ public class BubbleService extends Service {
 
     /**
      * 按当前模式重排定时任务。两个定时器互相独立：
-     * 余额刷新按「自动刷新间隔」，说话按固定的一分钟，混合模式下两者同时在跑。
+     * 余额刷新按「自动刷新间隔」，说话按设置里的「自动说话间隔」（0 表示不说），
+     * 混合模式下两者同时在跑。
      */
     private void restartTimers() {
         ui.removeCallbacks(tickBalance);
         ui.removeCallbacks(tickTalk);
         if (Prefs.queriesBalance(this)) ui.postDelayed(tickBalance, 1500L);
-        if (Prefs.speaks(this)) ui.postDelayed(tickTalk, PET_INTERVAL_MS);
+        long talk = Prefs.talkSec(this) * 1000L;
+        if (Prefs.speaks(this) && talk > 0) ui.postDelayed(tickTalk, talk);
     }
 
     /** 定时静默刷新余额（不弹气泡，只有金额变了才在混合模式里冒泡）。 */
@@ -466,9 +560,10 @@ public class BubbleService extends Service {
     private final Runnable tickTalk = new Runnable() {
         @Override
         public void run() {
-            if (!Prefs.speaks(BubbleService.this)) return;
+            long talk = Prefs.talkSec(BubbleService.this) * 1000L;
+            if (!Prefs.speaks(BubbleService.this) || talk <= 0) return;
             speak();
-            ui.postDelayed(tickTalk, PET_INTERVAL_MS);
+            ui.postDelayed(tickTalk, talk);
         }
     };
 
@@ -482,9 +577,9 @@ public class BubbleService extends Service {
         if (root == null || bubble == null) return;
         if (Prefs.key(this).isEmpty()) {
             if (reveal) {
-                bubble.setAmountSize(dp(15));
+                bubble.setAmountScale(0.82f);
                 bubble.setData("", "还没填 API Key 哦", true);
-                revealBubble(AUTO_HIDE_MS);
+                revealBubble(hideMs());
             }
             return;
         }
@@ -521,27 +616,27 @@ public class BubbleService extends Service {
         String prev = Prefs.lastAmount(this);
         if (r.ok) {
             String text = r.currency + r.amount;
-            bubble.setAmountSize(dp(22));
+            bubble.setAmountScale(1f);
             bubble.setData(balanceLabel(), text, false);
             Prefs.setLast(this, text);
             Prefs.setLastErr(this, "");
             // 混合模式：静默刷新发现金额变了，主动冒泡提醒一下。
-            if (!reveal && Prefs.mode(this) == Prefs.MODE_MIXED
+            if (!reveal && Prefs.notice(this) && Prefs.mode(this) == Prefs.MODE_MIXED
                     && prev != null && !prev.isEmpty() && !"--".equals(prev)
                     && !prev.equals(text)) {
                 playAction(PetAction.POP);
-                bubble.setAmountSize(dp(20));
+                bubble.setAmountScale(0.95f);
                 bubble.setData("余额有变化", text, false);
-                revealBubble(AUTO_HIDE_MS + 2500L);
+                revealBubble(hideMs() + 2500L);
             }
         } else {
             String msg = r.error == null ? "查询失败" : r.error;
             String first = msg.split("\n")[0];
-            bubble.setAmountSize(dp(15));
+            bubble.setAmountScale(0.72f);
             bubble.setData("", first, true);
             Prefs.setLastErr(this, msg);
         }
-        if (reveal) revealBubble(AUTO_HIDE_MS);
+        if (reveal) revealBubble(hideMs());
     }
 
     @Override

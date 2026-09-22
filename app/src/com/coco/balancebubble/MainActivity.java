@@ -1,999 +1,1211 @@
 package com.coco.balancebubble;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
-import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import org.json.JSONObject;
+
+import java.util.Iterator;
+import java.util.Map;
 
 /**
- * 设置界面。没有 aapt2，所有控件都在代码里搭，样式统一走 {@link Ui}。
- * 设计原则：常用项放最上面并配说明，危险/难懂的项收进「高级设置」。
+ * 设置页。
+ *
+ * <p>整页是「竖着的四张标签」：连接 / 气泡 / 角色 / 关于。顶部常驻一条实时预览，
+ * 里面就是悬浮窗真正用的那两个视图（气泡 + 角色），改任何一项都能立刻看见效果。
+ * 所有改动都写进 {@link Prefs}，然后给正在跑的悬浮窗发一条 START，
+ * 服务端会重建气泡样式并原地刷新列布局，不用重启服务。
  */
 public class MainActivity extends Activity {
 
-    /** 刷新间隔下拉框：只给几个好理解的档位，避免手填数字出错 */
-    private static final String[] INT_LABEL = {
-            "每 1 分钟", "每 5 分钟（推荐）", "每 10 分钟", "每 30 分钟",
-            "每 1 小时", "每 3 小时", "每 6 小时", "每 12 小时"
-    };
-    private static final int[] INT_VALUE = {1, 5, 10, 30, 60, 180, 360, 720};
-
     private Ui ui;
+    private Theme theme;
+    private Prefs.Draft cfg;
 
-    private LinearLayout body, advancedBox, statusBox, sizeBlock;
-    private TextView advToggle, tvStatus, tvRaw, tvRawToggle, tvPreset, tvSizeVal;
-    private TextView pillChar, pillCode, pillAnim, tvEye, tvModeDesc;
-    private Spinner spProvider, spCurrency, spInterval, spMode;
-    private EditText etKey, etLabel, etBase, etPath, etExtract, etHeader, etPrefix, etCustom;
-    private SeekBar sbSize;
-    private TextView btnRun, btnStop, btnTest;
-    private BubbleView preview;
-    private PetView previewChar;
+    private ScrollView scroller;
+    private LinearLayout page;
+    private FrameLayout previewBox;
+    private BubbleView previewBubble;
+    private PetView previewPet;
+    private EditText sampleInput;
+    private TextView heroBadge;
+    private TextView heroSub;
+    private TextView tipLine;
+    private Ui.Segment tabs;
+    private int tab = 0;
+    /** 重建界面期间为真，避免控件初始化时触发保存/推送 */
+    private boolean building = false;
+    /** 预览里用的示例文字（气泡 tab 里可以直接改，用来试断开行效果） */
+    private String sample = "¥33.83";
 
-    private boolean filling = false;   // 程序化赋值期间忽略监听
-    private boolean testing = false;
-    private boolean showCharValue = true;
-    private boolean showCodeValue = false;
-    private boolean animateValue = true;
-    private int modeValue = Prefs.MODE_MIXED;
+    /** 服务商下拉：换服务商要顺带改接口地址和币种，所以留个引用 */
+    private Spinner spPreset;
+    /** 币种下拉 */
+    private Spinner spCurrency;
+    /** 密钥输入框和它的「显示 / 隐藏」按钮 */
+    private EditText etKey;
+    private TextView btnShowKey;
+    private boolean keyShown = false;
+    /** 「立即测试」的结果文字 */
+    private TextView tvTest;
 
-    /** 预览里的角色也要自己动起来，让用户看到动作效果。 */
-    private final Handler previewHandler = new Handler(Looper.getMainLooper());
-    private final Runnable previewTick = new Runnable() {
+    /** 存盘是同步的，但往悬浮窗推 START 会重建气泡，打字时没必要每敲一个字推一次 */
+    private final Handler pusher = new Handler(Looper.getMainLooper());
+    private final Runnable push = new Runnable() {
         @Override
         public void run() {
-            if (previewChar != null && animateValue
-                    && previewChar.getVisibility() == View.VISIBLE) {
-                PetAction[] pool = PetAction.idlePool();
-                previewChar.play(pool[(int) (Math.random() * pool.length)]);
-            }
-            previewHandler.postDelayed(this, 2800);
+            if (Prefs.running(MainActivity.this)) send(BubbleService.ACTION_START);
         }
     };
 
-    // ================= 生命周期 =================
+    /** 输入框取值回调：不同字段存的东西不一样，搬进 cfg 的动作交给调用方。 */
+    private interface Field {
+        void set(String s);
+    }
+
+    /** 滑杆取值回调。 */
+    private interface IntSetter {
+        void set(int v);
+    }
 
     @Override
-    protected void onCreate(Bundle b) {
-        super.onCreate(b);
-        ui = new Ui(this);
-        ScrollView sv = new ScrollView(this);
-        sv.setBackgroundColor(Ui.BG);
-        body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(ui.dp(14), ui.dp(16), ui.dp(14), ui.dp(36));
-        sv.addView(body, new ViewGroup.LayoutParams(
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        cfg = Prefs.load(this);
+        theme = new Theme(cfg.theme, cfg.darkNow());
+        ui = new Ui(this, theme);
+        scroller = new ScrollView(this);
+        scroller.setBackgroundColor(theme.bg());
+        page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(0, 0, 0, ui.dp(28));
+        scroller.addView(page, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        setContentView(sv);
-        buildUi();
-        load();
+        setContentView(scroller);
+        buildAll();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        updateUi();
-        updatePreview();
-        previewHandler.removeCallbacks(previewTick);
-        previewHandler.postDelayed(previewTick, 1500);
+        if (!building) buildAll();
     }
 
-    @Override
-    protected void onPause() {
-        previewHandler.removeCallbacks(previewTick);
-        super.onPause();
+    /** 整页重画：换主题、切标签、复位设置都走这里。 */
+    private void buildAll() {
+        building = true;
+        page.removeAllViews();
+        addHero();
+        addPreview();
+        addTabs();
+        addTabBody();
+        building = false;
+        refreshStatus();
+    }
+    // ==================== 顶部 ====================
+
+    /** 顶部横幅：名字、状态、启动/停止、立即刷新。 */
+    private void addHero() {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+                theme.heroColors());
+        g.setCornerRadii(new float[]{0, 0, 0, 0, ui.dp(20), ui.dp(20), ui.dp(20), ui.dp(20)});
+        hero.setBackground(g);
+        hero.setPadding(ui.dp(18), ui.dp(22), ui.dp(18), ui.dp(16));
+
+        TextView title = new TextView(this);
+        title.setText("鲸鱼娘桌宠");
+        title.setTextSize(21f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(0xFFFFFFFF);
+        hero.addView(title);
+
+        heroSub = new TextView(this);
+        heroSub.setTextSize(12f);
+        heroSub.setTextColor(0x99FFFFFF);
+        LinearLayout.LayoutParams sp = ui.wrap();
+        sp.topMargin = ui.dp(4);
+        heroSub.setLayoutParams(sp);
+        hero.addView(heroSub);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams bp = ui.wrap();
+        bp.topMargin = ui.dp(14);
+        btns.setLayoutParams(bp);
+
+        heroBadge = ui.badge("已停止", false);
+        btns.addView(heroBadge);
+
+        TextView refresh = heroButton("立即刷新");
+        refresh.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                send(BubbleService.ACTION_REFRESH);
+                toast("已让悬浮窗刷新余额");
+            }
+        });
+        LinearLayout.LayoutParams rp = ui.wrap();
+        rp.leftMargin = ui.dp(8);
+        btns.addView(refresh, rp);
+
+        final TextView power = heroButton(Prefs.running(this) ? "停止桌宠" : "启动桌宠");
+        power.setId(android.R.id.button1);
+        power.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (Prefs.running(MainActivity.this)) {
+                    send(BubbleService.ACTION_STOP);
+                    Prefs.setRunning(MainActivity.this, false);
+                } else {
+                    send(BubbleService.ACTION_START);
+                    Prefs.setRunning(MainActivity.this, true);
+                }
+                buildAll();
+            }
+        });
+        LinearLayout.LayoutParams pp = ui.wrap();
+        pp.leftMargin = ui.dp(8);
+        btns.addView(power, pp);
+
+        hero.addView(btns);
+        page.addView(hero);
     }
 
-    // ================= 界面搭建 =================
-
-    private void buildUi() {
-        body.addView(hero());
-        body.addView(guideCard());
-        body.addView(providerCard());
-        body.addView(keyCard());
-        body.addView(displayCard());
-        body.addView(actionCard());
-        body.addView(advancedCard());
-        body.addView(aboutCard());
+    /** 顶部横幅上的小按钮：半透明白底 + 白字。 */
+    private TextView heroButton(String text) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextSize(12.5f);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setTextColor(0xFF1D2333);
+        b.setPadding(ui.dp(12), ui.dp(6), ui.dp(12), ui.dp(6));
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(0xE6FFFFFF);
+        g.setCornerRadius(ui.dp(14));
+        b.setBackground(g);
+        return b;
     }
 
-    /** 顶部横幅 */
-    private View hero() {
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0xFF2F6FED, 0xFF6B4BF0});
-        g.setCornerRadius(ui.dp(18));
-        l.setBackground(g);
-        l.setPadding(ui.dp(18), ui.dp(18), ui.dp(18), ui.dp(18));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        p.bottomMargin = ui.dp(13);
-        l.setLayoutParams(p);
+    // ==================== 实时预览 ====================
 
-        TextView t = ui.text("鲸鱼娘桌宠", 21f, 0xFFFFFFFF);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        l.addView(t);
+    /**
+     * 预览面板：里面就是悬浮窗用的同一套视图（{@link BubbleView} + {@link PetView}），
+     * 只是尺寸按屏幕缩放了一下。改字号/宽度/行数/颜色/尖角方向都能立刻看到效果。
+     */
+    private void addPreview() {
+        LinearLayout card = ui.card();
+        card.addView(ui.cardTitle("实时预览", "下面这个气泡和悬浮窗里的完全是同一套代码，改设置它会立刻变"));
 
-        TextView s = ui.text("角色常驻桌面，点一下 = 说句卖萌话 / 刷新 API 余额", 12.5f, 0xFFD8E3FF);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sp.topMargin = ui.dp(6);
-        s.setLayoutParams(sp);
-        l.addView(s);
-        return l;
-    }
+        sampleInput = ui.edit(sample, 1);
+        sampleInput.setHint("输入一段文字试试折行效果");
+        LinearLayout.LayoutParams ip = ui.wrap();
+        ip.topMargin = ui.dp(8);
+        sampleInput.setLayoutParams(ip);
+        sampleInput.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
 
-    /** 三步上手 */
-    private View guideCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("三步就能用"));
-        c.addView(step("1", "选服务商", "下面第一个下拉框，选你充值的那家，比如 DeepSeek。"));
-        c.addView(step("2", "粘贴 API Key", "去服务商官网的「API Keys」页面新建一个，复制粘贴到第二个框。"));
-        c.addView(step("3", "点「保存并显示气泡」", "授权悬浮窗后角色就出现了。拖动可换位置，点一下按当前模式说话或查余额，长按回到本页。"));
-        return c;
-    }
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+            }
 
-    private View step(String no, String title, String desc) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rp.topMargin = ui.dp(11);
-        row.setLayoutParams(rp);
+            @Override
+            public void afterTextChanged(android.text.Editable e) {
+                sample = e.toString();
+                fillPreview();
+            }
+        });
+        card.addView(sampleInput);
 
-        TextView badge = ui.text(no, 12f, 0xFFFFFFFF);
-        badge.setTypeface(Typeface.DEFAULT_BOLD);
-        badge.setGravity(Gravity.CENTER);
-        badge.setBackground(Ui.round(Ui.ACCENT, ui.dp(13), 0, 0));
-        row.addView(badge, new LinearLayout.LayoutParams(ui.dp(26), ui.dp(26)));
+        previewBox = new FrameLayout(this);
+        int h = ui.dp((int) (Prefs.charSize(this) * PetView.VIEW_H_RATIO) + 130);
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, h);
+        fp.topMargin = ui.dp(10);
+        previewBox.setLayoutParams(fp);
+        previewBox.setBackground(ui.round(theme.panel(), ui.dp(14), ui.dp(1), theme.line()));
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        cp.leftMargin = ui.dp(10);
-        col.setLayoutParams(cp);
-        TextView t = ui.text(title, 13.5f, Ui.TXT);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        col.addView(t);
-        col.addView(ui.hint(desc));
-        row.addView(col);
-        return row;
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        previewBubble = new BubbleView(this, BubbleStyle.build(cfg, ui.density()));
+        previewPet = new PetView(this);
+        previewPet.setAnimated(cfg.animate);
+        previewPet.setIdleLevel(cfg.petIdle);
+        col.addView(previewBubble);
+        col.addView(previewPet, new LinearLayout.LayoutParams(
+                ui.dp(cfg.charSize), ui.dp((int) (cfg.charSize * PetView.VIEW_H_RATIO))));
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cp.gravity = Gravity.CENTER;
+        previewBox.addView(col, cp);
+        card.addView(previewBox);
+
+        tipLine = ui.text("", 11.5f, theme.sub());
+        LinearLayout.LayoutParams tp = ui.wrap();
+        tp.topMargin = ui.dp(8);
+        tipLine.setLayoutParams(tp);
+        card.addView(tipLine);
+
+        page.addView(card);
+        fillPreview();
     }
 
-    /** ① 服务商 */
-    private View providerCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("① 选择服务商"));
-        spProvider = ui.spinner(Presets.NAMES);
-        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        pp.topMargin = ui.dp(12);
-        c.addView(spProvider, pp);
-        spProvider.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                if (filling) return;
-                applyPreset(pos);
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> p) {
-            }
-        });
-
-        tvPreset = ui.text("", 11.6f, Ui.SUB);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tp.topMargin = ui.dp(9);
-        tvPreset.setLayoutParams(tp);
-        c.addView(tvPreset);
-
-        c.addView(ui.hint("选好服务商后，接口地址会自动填好，你不用管。下面只需要填 API Key。"));
-        return c;
+    /** 把当前设置 + 示例文字灌进预览里的气泡。 */
+    private void fillPreview() {
+        if (previewBubble == null) return;
+        previewBubble.applyStyle(BubbleStyle.build(cfg, ui.density()));
+        String label = cfg.showTitle && !cfg.label.trim().isEmpty()
+                ? cfg.label.trim() + " 余额" : "";
+        previewBubble.setData(label, sample.isEmpty() ? " " : sample, false);
+        previewBubble.setVisibility(View.VISIBLE);
+        if (tipLine != null) tipLine.setText(previewBubble.describe());
     }
+    // ==================== 标签页 ====================
 
-    /** ② API Key + 测试 */
-    private View keyCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("② 填 API Key"));
+    private static final String[] TAB_NAMES = {"连接", "气泡", "角色", "关于"};
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rp.topMargin = ui.dp(12);
-        row.setLayoutParams(rp);
-
-        etKey = ui.edit("sk-xxxxxxxxxxxxxxxx", InputType.TYPE_CLASS_TEXT
-                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        row.addView(etKey, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        tvEye = ui.text("显示", 12.5f, Ui.ACCENT);
-        tvEye.setPadding(ui.dp(12), ui.dp(10), ui.dp(4), ui.dp(10));
-        tvEye.setClickable(true);
-        tvEye.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                toggleKeyMask();
-            }
-        });
-        row.addView(tvEye);
-        c.addView(row);
-
-        c.addView(ui.hint("在你所选服务商的官网「API Keys / 密钥管理」页面创建后复制。"
-                + "密钥只存在本机 App 私有目录，直接发往服务商，不经过任何第三方。"));
-
-        btnTest = ui.button("测试连接（先确认能查到余额）", false);
+    private void addTabs() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        bp.topMargin = ui.dp(13);
-        btnTest.setLayoutParams(bp);
-        btnTest.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                doTest();
-            }
-        });
-        c.addView(btnTest);
-
-        statusBox = new LinearLayout(this);
-        statusBox.setOrientation(LinearLayout.VERTICAL);
-        statusBox.setVisibility(View.GONE);
-        LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sbp.topMargin = ui.dp(11);
-        statusBox.setLayoutParams(sbp);
-        statusBox.setPadding(ui.dp(12), ui.dp(11), ui.dp(12), ui.dp(11));
-
-        tvStatus = ui.text("", 12.6f, Ui.TXT);
-        statusBox.addView(tvStatus);
-
-        tvRawToggle = ui.link("查看接口原始返回 ▾");
-        tvRawToggle.setVisibility(View.GONE);
-        statusBox.addView(tvRawToggle);
-
-        tvRaw = ui.text("", 10.8f, Ui.SUB);
-        tvRaw.setTypeface(Typeface.MONOSPACE);
-        tvRaw.setVisibility(View.GONE);
-        statusBox.addView(tvRaw);
-
-        tvRawToggle.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                boolean show = tvRaw.getVisibility() != View.VISIBLE;
-                tvRaw.setVisibility(show ? View.VISIBLE : View.GONE);
-                tvRawToggle.setText(show ? "收起接口原始返回 ▴" : "查看接口原始返回 ▾");
-            }
-        });
-        c.addView(statusBox);
-        return c;
-    }
-
-    /** ③ 显示与刷新 */
-    private View displayCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("③ 模式与显示"));
-
-        c.addView(ui.label("运行模式"));
-        spMode = ui.spinner(Prefs.MODE_NAMES);
-        c.addView(spMode);
-        tvModeDesc = ui.hint(Prefs.MODE_DESC[Prefs.MODE_MIXED]);
-        c.addView(tvModeDesc);
-        spMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                modeValue = Prefs.clampMode(pos);
-                renderModeDesc();
-                if (filling) return;
-                applyModeChange();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> p) {
-            }
-        });
-
-        c.addView(ui.divider());
-
-        c.addView(ui.label("金额币种"));
-        String[] items = new String[Currencies.CODES.length];
-        for (int i = 0; i < items.length; i++) items[i] = Currencies.label(i);
-        spCurrency = ui.spinner(items);
-        c.addView(spCurrency);
-        spCurrency.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                if (filling) return;
-                updatePreview();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> p) {
-            }
-        });
-        c.addView(ui.hint("接口只返回一个数字，币种是显示用的。默认人民币，"
-                + "用美元计费的服务（OpenRouter / OpenAI）记得改成美元。"));
-
-        c.addView(ui.label("自动刷新间隔"));
-        spInterval = ui.spinner(INT_LABEL);
-        c.addView(spInterval);
-        spInterval.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                if (filling) return;
-                updatePreview();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> p) {
-            }
-        });
-        c.addView(ui.hint("间隔越短越及时，但接口调用次数更多。查询余额一般很宽松，5 分钟够用。"));
-
-        c.addView(ui.divider());
-
-        LinearLayout charRow = new LinearLayout(this);
-        charRow.setOrientation(LinearLayout.HORIZONTAL);
-        charRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams crp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        crp.topMargin = ui.dp(12);
-        charRow.setLayoutParams(crp);
-        TextView cl = ui.text("气泡下方显示角色", 13.2f, Ui.TXT);
-        charRow.addView(cl, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pillChar = pill();
-        pillChar.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showCharValue = !showCharValue;
-                renderToggles();
-                updatePreview();
-            }
-        });
-        charRow.addView(pillChar);
-        c.addView(charRow);
-        c.addView(ui.hint("关掉就只留一个气泡，适合不想让角色挡视线的时候。"));
-
-        LinearLayout animRow = new LinearLayout(this);
-        animRow.setOrientation(LinearLayout.HORIZONTAL);
-        animRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams arp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        arp.topMargin = ui.dp(13);
-        animRow.setLayoutParams(arp);
-        animRow.addView(ui.text("角色动作", 13.2f, Ui.TXT),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pillAnim = pill();
-        pillAnim.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                animateValue = !animateValue;
-                renderToggles();
-                updatePreview();
-            }
-        });
-        animRow.addView(pillAnim);
-        c.addView(animRow);
-        c.addView(ui.hint("角色是骨架式动画：会挥手、眨眼、甩尾巴、蹦跳、打瞌睡，"
-                + "说话时会配合做动作。关掉就站着不动，可以省电。"));
-
-        sizeBlock = new LinearLayout(this);
-        sizeBlock.setOrientation(LinearLayout.VERTICAL);
-        c.addView(sizeBlock);
-
-        LinearLayout sizeHead = new LinearLayout(this);
-        sizeHead.setOrientation(LinearLayout.HORIZONTAL);
-        sizeHead.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams shp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        shp.topMargin = ui.dp(13);
-        sizeHead.setLayoutParams(shp);
-        sizeHead.addView(ui.text("角色大小", 13.2f, Ui.TXT),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        tvSizeVal = ui.text("96 dp", 12.5f, Ui.SUB);
-        sizeHead.addView(tvSizeVal);
-        sizeBlock.addView(sizeHead);
-
-        sbSize = new SeekBar(this);
-        sbSize.setMax(100);
-        sbSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                tvSizeVal.setText(sizeDp() + " dp");
-                if (fromUser) updatePreview();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar s) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) {
-            }
-        });
-        sizeBlock.addView(sbSize);
-
-        c.addView(ui.divider());
-
-        TextView pvTitle = ui.text("效果预览", 12.5f, Ui.SUB);
-        LinearLayout.LayoutParams ptp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ptp.topMargin = ui.dp(12);
-        pvTitle.setLayoutParams(ptp);
-        c.addView(pvTitle);
-
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setGravity(Gravity.CENTER_HORIZONTAL);
-        panel.setBackground(Ui.round(0xFFE7EDF7, ui.dp(13), ui.dp(1), Ui.LINE));
-        panel.setPadding(ui.dp(12), ui.dp(18), ui.dp(12), ui.dp(14));
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        plp.topMargin = ui.dp(8);
-        panel.setLayoutParams(plp);
-
-        preview = new BubbleView(this);
-        panel.addView(preview);
-        previewChar = new PetView(this);
-        panel.addView(previewChar);
-        c.addView(panel);
-        return c;
-    }
-
-    /** 主操作按钮 */
-    private View actionCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("④ 开启气泡"));
-
-        btnRun = ui.button("保存并显示气泡", true);
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.leftMargin = ui.dp(14);
+        bp.rightMargin = ui.dp(14);
         bp.topMargin = ui.dp(12);
-        btnRun.setLayoutParams(bp);
-        btnRun.setOnClickListener(new View.OnClickListener() {
+        box.setLayoutParams(bp);
+
+        tabs = ui.segment(TAB_NAMES, tab, new Ui.OnPick() {
             @Override
-            public void onClick(View v) {
-                start(true);
+            public void onPick(int i) {
+                tab = i;
+                buildAll();
+                scroller.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        scroller.smoothScrollTo(0, 0);
+                    }
+                });
             }
         });
-        c.addView(btnRun);
-
-        btnStop = ui.button("关闭气泡", false);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sp.topMargin = ui.dp(9);
-        btnStop.setLayoutParams(sp);
-        btnStop.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                stopService(new Intent(MainActivity.this, BubbleService.class));
-                Prefs.setRunning(MainActivity.this, false);
-                setStatus("气泡已关闭。重新点上面的按钮可以再打开。", 0);
-                updateUi();
-            }
-        });
-        c.addView(btnStop);
-
-        c.addView(ui.hint("开启后回到桌面就能看到角色：拖动＝换位置（松开后记住），"
-                + "点一下＝按当前模式说话或刷新余额，长按＝回到这个设置页。"));
-        return c;
+        box.addView(tabs.row);
+        page.addView(box);
     }
 
-    /** 高级设置，默认折叠 */
-    private View advancedCard() {
-        LinearLayout c = ui.card();
-
-        advToggle = ui.text("▸  高级设置（不确定就别改）", 13.5f, Ui.ACCENT);
-        advToggle.setTypeface(Typeface.DEFAULT_BOLD);
-        advToggle.setPadding(0, ui.dp(3), 0, ui.dp(3));
-        advToggle.setClickable(true);
-        advToggle.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                boolean show = advancedBox.getVisibility() != View.VISIBLE;
-                advancedBox.setVisibility(show ? View.VISIBLE : View.GONE);
-                advToggle.setText(show ? "▾  高级设置（不确定就别改）"
-                        : "▸  高级设置（不确定就别改）");
-            }
-        });
-        c.addView(advToggle);
-
-        advancedBox = new LinearLayout(this);
-        advancedBox.setOrientation(LinearLayout.VERTICAL);
-        advancedBox.setVisibility(View.GONE);
-
-        advancedBox.addView(ui.hint("下面这些是接口细节。选完服务商之后已经自动填好，"
-                + "只有换到不在列表里的服务、或者报错时才会用到。"));
-
-        etLabel = advField("气泡上显示的名字（留空则只显示金额）", "",
-                InputType.TYPE_CLASS_TEXT, "例如 DeepSeek。气泡第一行显示的就是它。");
-
-        etBase = advField("Base URL（接口域名）", "https://api.deepseek.com",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI,
-                "服务商接口的根地址，以 https:// 开头，结尾不要带 /。");
-
-        etPath = advField("余额接口路径", "/user/balance",
-                InputType.TYPE_CLASS_TEXT,
-                "查询余额的接口，例如 /user/balance。报 404 多半是这里填错了。");
-
-        etExtract = advField("金额字段路径（留空＝自动识别）", "balance_infos.0.total_balance",
-                InputType.TYPE_CLASS_TEXT,
-                "余额在返回结果里的位置，用点号表示层级，数组写序号，"
-                + "例如 balance_infos.0.total_balance。留空则自动找第一个像余额的数字。");
-
-        etHeader = advField("认证请求头名称", "Authorization",
-                InputType.TYPE_CLASS_TEXT,
-                "绝大多数服务商都是 Authorization。个别服务商（如 OpenRouter）还需额外的头，"
-                + "本 App 只支持改这一个。");
-
-        etPrefix = advField("认证前缀", "Bearer ",
-                InputType.TYPE_CLASS_TEXT, "拼接方式：前缀 + 你的 Key。默认 Bearer 加一个空格，不要删空格。");
-
-        etCustom = advField("自定义货币符号", "",
-                InputType.TYPE_CLASS_TEXT,
-                "只有当上面的「金额币种」选了「自定义符号」时才生效，例如填 元 或 USDT。");
-
-        LinearLayout codeRow = new LinearLayout(this);
-        codeRow.setOrientation(LinearLayout.HORIZONTAL);
-        codeRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams crp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        crp.topMargin = ui.dp(16);
-        codeRow.setLayoutParams(crp);
-        codeRow.addView(ui.text("金额后面补上币种代码", 13.2f, Ui.TXT),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pillCode = pill();
-        pillCode.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showCodeValue = !showCodeValue;
-                renderToggles();
-                updatePreview();
-            }
-        });
-        codeRow.addView(pillCode);
-        advancedBox.addView(codeRow);
-        advancedBox.addView(ui.hint("开启后气泡显示成 33.83 CNY，方便区分人民币和日元这类同符号的币种。"));
-
-        TextView btnReset = ui.button("把气泡放回默认位置", false);
-        LinearLayout.LayoutParams rp1 = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rp1.topMargin = ui.dp(16);
-        btnReset.setLayoutParams(rp1);
-        btnReset.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (!Prefs.running(MainActivity.this)) {
-                    setStatus("气泡还没开，先点上面的「保存并显示气泡」。", 0);
-                    return;
-                }
-                Intent i = new Intent(MainActivity.this, BubbleService.class);
-                i.setAction(BubbleService.ACTION_RESET_POS);
-                startService(i);
-                setStatus("气泡已回到默认位置（屏幕下方中间），再拖一次即可。", 1);
-            }
-        });
-        advancedBox.addView(btnReset);
-
-        TextView btnReload = ui.button("恢复当前服务商的默认参数", false);
-        LinearLayout.LayoutParams rp2 = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rp2.topMargin = ui.dp(9);
-        btnReload.setLayoutParams(rp2);
-        btnReload.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                applyPreset(spProvider.getSelectedItemPosition());
-                save();
-                setStatus("已按当前服务商重填接口参数。", 1);
-            }
-        });
-        advancedBox.addView(btnReload);
-
-        c.addView(advancedBox);
-        return c;
-    }
-
-    private View aboutCard() {
-        LinearLayout c = ui.card();
-        c.addView(ui.cardTitle("说明"));
-        c.addView(ui.hint("· 气泡平时是收起的，点一下角色才弹出来，几秒后自动收起。"));
-        c.addView(ui.hint("· 密钥只保存在本机 /data/data/com.coco.balancebubble/ 里，"
-                + "查询请求直接发给你填的服务商地址，中间不经过任何服务器。"));
-        c.addView(ui.hint("· 开机自启只在「上次开着气泡 + 已授权悬浮窗 + 已填密钥」都满足时才会恢复。"));
-        c.addView(ui.hint("· 版本 1.3　包名 com.coco.balancebubble"));
-        return c;
-    }
-
-    // ================= 小控件 =================
-
-    private EditText advField(String label, String hintText, int inputType, String desc) {
-        advancedBox.addView(ui.label(label));
-        EditText e = ui.edit(hintText, inputType);
-        advancedBox.addView(e);
-        advancedBox.addView(ui.hint(desc));
-        if (label.startsWith("气泡上显示")) {
-            e.addTextChangedListener(new android.text.TextWatcher() {
-                @Override
-                public void beforeTextChanged(CharSequence s, int a, int b, int c) {
-                }
-
-                @Override
-                public void onTextChanged(CharSequence s, int a, int b, int c) {
-                }
-
-                @Override
-                public void afterTextChanged(android.text.Editable s) {
-                    if (!filling) updatePreview();
-                }
-            });
+    /** 当前标签页的内容（每个 tab 自己往 page 里加卡片）。 */
+    private void addTabBody() {
+        switch (tab) {
+            case 0:
+                tabConn();
+                break;
+            case 1:
+                tabBubble();
+                break;
+            case 2:
+                tabPet();
+                break;
+            default:
+                tabAbout();
+                break;
         }
+    }
+
+    // ==================== 公共小工具 ====================
+
+    /** 给悬浮窗发指令。 */
+    private void send(String action) {
+        Intent i = new Intent(this, BubbleService.class);
+        i.setAction(action);
+        startService(i);
+    }
+
+    /**
+     * 存盘 + 通知悬浮窗换外观（重建界面之前先调用它）。
+     *
+     * <p>存盘是同步的，往服务推 START 会重建气泡窗口；设置页里打字、拖滑杆时
+     * 一次输入可能触发十几个字符，所以推 START 合并到 180ms 之后再发一次，
+     * 免得气泡跟着抖。存盘不受影响，退出页面也不会丢。
+     */
+    private void apply() {
+        cfg.save(this);
+        pusher.removeCallbacks(push);
+        pusher.postDelayed(push, 180);
+    }
+
+    /** 存盘 + 刷新预览（改气泡外观的控件都走这条）。 */
+    private void applyLive() {
+        apply();
+        fillPreview();
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+
+    /** 顶部状态文字。 */
+    private void refreshStatus() {
+        boolean on = Prefs.running(this);
+        if (heroBadge != null) {
+            heroBadge.setText(on ? "运行中" : "已停止");
+            heroBadge.setTextColor(on ? theme.ok() : theme.sub());
+            heroBadge.setBackground(ui.pill(on ? theme.okBg() : theme.field()));
+        }
+        if (heroSub != null) {
+            String mode = Prefs.MODE_NAMES[cfg.mode];
+            String key = cfg.key.trim().isEmpty() ? "还没填 API Key" : "已配置";
+            heroSub.setText(mode + " · " + key + " · 气泡 "
+                    + cfg.bubbleMaxW + "dp / " + cfg.bubbleFont + "sp / " + cfg.bubbleLines + " 行");
+        }
+        if (page != null && page.getChildCount() > 0) {
+            View hero = page.getChildAt(0);
+            if (hero instanceof LinearLayout) {
+                View b = ((LinearLayout) hero).findViewById(android.R.id.button1);
+                if (b instanceof TextView) ((TextView) b).setText(on ? "停止桌宠" : "启动桌宠");
+            }
+        }
+    }
+    /**
+     * 换主题 / 换深浅模式之后整页重画。
+     *
+     * <p>颜色是在建控件的时候一次写死的（这个项目没有 XML 主题），
+     * 所以只能把整棵树重新搭一遍，见 {@link #buildAll()}。
+     */
+    private void rebuild() {
+        theme = new Theme(cfg.theme, cfg.darkNow());
+        ui = new Ui(this, theme);
+        scroller.setBackgroundColor(theme.bg());
+        buildAll();
+    }
+
+    /** 一行输入框：字段名 + 输入框，边打字边存。 */
+    private EditText addField(LinearLayout into, String label, String value, final Field f) {
+        into.addView(ui.label(label));
+        final EditText e = ui.edit(value, android.text.InputType.TYPE_CLASS_TEXT);
+        e.setText(value);
+        e.setSelection(e.getText().length());
+        e.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable ed) {
+                if (building) return;
+                f.set(ed.toString());
+            }
+        });
+        into.addView(e);
         return e;
     }
 
-    private TextView pill() {
-        TextView t = new TextView(this);
-        t.setTextSize(13f);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(ui.dp(15), ui.dp(7), ui.dp(15), ui.dp(7));
-        t.setClickable(true);
-        return t;
+    /** 一行滑杆：标题 + 说明 + 当前值，拖动的时候预览跟着变。 */
+    private void addSlider(LinearLayout into, String title, String desc, final int min, int max,
+                           int value, Ui.Fmt fmt, final IntSetter set) {
+        Ui.Slider s = ui.sliderRow(title, desc, min, max, value, fmt,
+                new SeekBar.OnSeekBarChangeListener() {
+                    @Override
+                    public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                        set.set(Ui.sliderValue(bar, min));
+                        applyLive();
+                    }
+
+                    @Override
+                    public void onStartTrackingTouch(SeekBar bar) {
+                    }
+
+                    @Override
+                    public void onStopTrackingTouch(SeekBar bar) {
+                    }
+                });
+        into.addView(s.row);
     }
 
-    private void renderToggles() {
-        if (pillChar != null) {
-            pillChar.setText(showCharValue ? "已开启" : "已关闭");
-            pillChar.setTextColor(showCharValue ? Ui.OK : Ui.SUB);
-            pillChar.setBackground(Ui.round(showCharValue ? Ui.OK_BG : 0xFFF1F4F9,
-                    ui.dp(20), ui.dp(1), showCharValue ? 0xFFB6E2CC : Ui.LINE));
-        }
-        if (pillCode != null) {
-            pillCode.setText(showCodeValue ? "已开启" : "已关闭");
-            pillCode.setTextColor(showCodeValue ? Ui.OK : Ui.SUB);
-            pillCode.setBackground(Ui.round(showCodeValue ? Ui.OK_BG : 0xFFF1F4F9,
-                    ui.dp(20), ui.dp(1), showCodeValue ? 0xFFB6E2CC : Ui.LINE));
-        }
-        if (pillAnim != null) {
-            pillAnim.setText(animateValue ? "已开启" : "已关闭");
-            pillAnim.setTextColor(animateValue ? Ui.OK : Ui.SUB);
-            pillAnim.setBackground(Ui.round(animateValue ? Ui.OK_BG : 0xFFF1F4F9,
-                    ui.dp(20), ui.dp(1), animateValue ? 0xFFB6E2CC : Ui.LINE));
-        }
-        if (sizeBlock != null) {
-            sizeBlock.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    /** 模式说明跟着下拉框走。 */
-    private void renderModeDesc() {
-        if (tvModeDesc != null) tvModeDesc.setText(Prefs.MODE_DESC[Prefs.clampMode(modeValue)]);
-    }
-
-    /** 模式改了立刻生效：服务在跑就让它重排定时任务。 */
-    private void applyModeChange() {
-        Prefs.setMode(this, modeValue);
-        Prefs.setAnimate(this, animateValue);
-        if (!Prefs.running(this)) return;
-        Intent i = new Intent(this, BubbleService.class);
-        i.setAction(BubbleService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-        else startService(i);
-    }
-
-    private void setStatus(String text, int kind) {
-        if (statusBox == null) return;
-        statusBox.setVisibility(View.VISIBLE);
-        tvStatus.setText(text);
-        int bg, fg, stroke;
-        if (kind == 1) {
-            bg = Ui.OK_BG;
-            fg = Ui.OK;
-            stroke = 0xFFB6E2CC;
-        } else if (kind == 2) {
-            bg = Ui.ERR_BG;
-            fg = Ui.ERR;
-            stroke = 0xFFF3C9C3;
-        } else {
-            bg = Ui.INFO_BG;
-            fg = Ui.TXT;
-            stroke = 0xFFCBDCFB;
-        }
-        statusBox.setBackground(Ui.round(bg, ui.dp(11), ui.dp(1), stroke));
-        tvStatus.setTextColor(fg);
-    }
-
-    private void toggleKeyMask() {
-        boolean masked = (etKey.getInputType() & InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0;
-        etKey.setInputType(InputType.TYPE_CLASS_TEXT
-                | (masked ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-                : InputType.TYPE_TEXT_VARIATION_PASSWORD));
-        tvEye.setText(masked ? "隐藏" : "显示");
-        if (etKey.getText() != null) etKey.setSelection(etKey.getText().length());
-    }
-
-    // ================= 预览 =================
-
-    private void updatePreview() {
-        if (preview == null || spCurrency == null) return;
-        int ci = spCurrency.getSelectedItemPosition();
-        String code = Currencies.code(ci);
-        String custom = etCustom == null ? "" : etCustom.getText().toString().trim();
-        String sym = Currencies.prefix(code, custom, "CNY", showCodeValue);
-        String name = etLabel == null ? "" : etLabel.getText().toString().trim();
-        String label = name.isEmpty() ? "" : name + " 余额";
-        preview.setData(label, sym + "33.83" + Currencies.suffix(code, showCodeValue), false);
-
-        if (previewChar != null) {
-            int w = ui.dp(sizeDp());
-            int hh = (int) (w * PetView.VIEW_H_RATIO);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, hh);
-            lp.topMargin = ui.dp(4);
-            previewChar.setLayoutParams(lp);
-            previewChar.setVisibility(showCharValue ? View.VISIBLE : View.GONE);
-            previewChar.setAnimated(animateValue);
-        }
-    }
-
-    // ================= 数据 =================
-
-    private void applyPreset(int pos) {
-        if (pos < 0 || pos >= Presets.NAMES.length) return;
-        if (Presets.isCustom(pos)) {
-            // 自定义：保留已经填好的内容，避免误清空
-            if (etLabel.getText().toString().trim().isEmpty()) etLabel.setText(Presets.label(pos));
-            refreshPresetInfo();
-            updatePreview();
+    /**
+     * 拿现在填的这一套设置真去请求一次，结果显示在按钮下面。
+     *
+     * <p>不走悬浮窗（悬浮窗可能还没启动），直接在设置页里跑一遍，
+     * 边调边看是哪一步不对。请求放在后台线程，结果回主线程显示。
+     */
+    private void testNow() {
+        if (tvTest == null) return;
+        apply();
+        if (cfg.key.trim().isEmpty()) {
+            tvTest.setTextColor(theme.sub());
+            tvTest.setText("先在上面填 API Key，没有它连不上。");
             return;
         }
-        etLabel.setText(Presets.label(pos));
-        etBase.setText(Presets.base(pos));
-        etPath.setText(Presets.path(pos));
-        etExtract.setText(Presets.extract(pos));
-        etHeader.setText("Authorization");
-        etPrefix.setText("Bearer ");
-        spCurrency.setSelection(Currencies.indexOfCode(Presets.currency(pos)));
-        refreshPresetInfo();
-        updatePreview();
-    }
-
-    private void refreshPresetInfo() {
-        if (tvPreset == null) return;
-        int pos = spProvider == null ? 0 : spProvider.getSelectedItemPosition();
-        String base = etBase == null ? "" : etBase.getText().toString().trim();
-        String path = etPath == null ? "" : etPath.getText().toString().trim();
-        String url = BalanceApi.join(base, path);
-        tvPreset.setText("接口：" + (url.isEmpty() ? "（还没填）" : url)
-                + "\n" + Presets.note(pos));
-    }
-
-    private void load() {
-        filling = true;
-        Prefs.Draft d = Prefs.load(this);
-        int pi = Presets.indexOfName(d.provider);
-        spProvider.setSelection(pi);
-        if (d.base == null || d.base.trim().isEmpty()) applyPreset(pi);
-        etLabel.setText(d.label);
-        etBase.setText(d.base);
-        etPath.setText(d.path);
-        etKey.setText(d.key == null ? "" : d.key);
-        etExtract.setText(d.extract);
-        etHeader.setText(d.header);
-        etPrefix.setText(d.prefix);
-        etCustom.setText(d.curCustom);
-        spCurrency.setSelection(Currencies.indexOfCode(d.curCode));
-        spInterval.setSelection(intervalIndex(d.interval));
-        showCharValue = d.showChar;
-        showCodeValue = d.showCode;
-        modeValue = d.mode;
-        animateValue = d.animate;
-        if (spMode != null) spMode.setSelection(modeValue);
-        sbSize.setProgress(sizeProgress(d.charSize));
-        tvSizeVal.setText(d.charSize + " dp");
-        filling = false;
-        renderToggles();
-        refreshPresetInfo();
-        updatePreview();
-        updateUi();
-    }
-
-    private Prefs.Draft collect() {
-        Prefs.Draft d = new Prefs.Draft();
-        d.provider = Presets.NAMES[Math.max(0, spProvider.getSelectedItemPosition())];
-        d.label = etLabel.getText().toString().trim();
-        d.base = etBase.getText().toString().trim();
-        d.path = etPath.getText().toString().trim();
-        d.key = etKey.getText().toString().trim();
-        d.extract = etExtract.getText().toString().trim();
-        d.header = etHeader.getText().toString().trim();
-        d.prefix = etPrefix.getText().toString();
-        d.curCode = Currencies.code(spCurrency.getSelectedItemPosition());
-        d.curCustom = etCustom.getText().toString().trim();
-        d.interval = INT_VALUE[intervalIndex(spInterval.getSelectedItemPosition())];
-        d.charSize = sizeDp();
-        d.showChar = showCharValue;
-        d.showCode = showCodeValue;
-        d.mode = modeValue;
-        d.animate = animateValue;
-        return d;
-    }
-
-    private void save() {
-        Prefs.save(this, collect());
-    }
-
-    private int intervalIndex(int minutes) {
-        int best = 1;
-        int diff = Integer.MAX_VALUE;
-        for (int i = 0; i < INT_VALUE.length; i++) {
-            int v = Math.abs(INT_VALUE[i] - minutes);
-            if (v < diff) {
-                diff = v;
-                best = i;
-            }
-        }
-        return best;
-    }
-
-    private int sizeDp() {
-        return 60 + (int) Math.round(sbSize.getProgress() * 1.6);
-    }
-
-    private int sizeProgress(int dpValue) {
-        int p = (int) Math.round((dpValue - 60) / 1.6);
-        return Math.max(0, Math.min(100, p));
-    }
-
-    // ================= 动作 =================
-
-    private void start(boolean checkPermission) {
-        Prefs.Draft d = collect();
-        if (d.key.isEmpty()) {
-            setStatus("还没填 API Key。去服务商官网的「API Keys」页面创建一个，粘贴到第 ② 步的框里。", 2);
-            return;
-        }
-        if (d.base.isEmpty()) {
-            setStatus("Base URL 是空的。回到第 ① 步重新选一次服务商，或在高级设置里手动填。", 2);
-            return;
-        }
-        Prefs.save(this, d);
-        if (checkPermission && !hasOverlay()) {
-            askOverlay();
-            return;
-        }
-        Intent i = new Intent(this, BubbleService.class);
-        i.setAction(BubbleService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-        else startService(i);
-        Prefs.setRunning(this, true);
-        setStatus("已开启。回到桌面即可看到角色，拖动换位置 / 点一下按模式说话或查余额 / 长按回到本页。", 1);
-        updateUi();
-    }
-
-    private void doTest() {
-        if (testing) return;
-        final Prefs.Draft d = collect();
-        testing = true;
-        btnTest.setEnabled(false);
-        setStatus("正在请求 " + BalanceApi.join(d.base, d.path) + " …\n请稍等，最长 20 秒。", 0);
-        tvRaw.setVisibility(View.GONE);
-        tvRawToggle.setVisibility(View.GONE);
+        tvTest.setTextColor(theme.sub());
+        tvTest.setText("正在请求 " + BalanceApi.join(cfg.base, cfg.path) + " …");
+        final Prefs.Draft snap = cfg;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final BalanceApi.Result r = BalanceApi.query(MainActivity.this, d.base, d.path,
-                        d.key, d.header, d.prefix, d.extract, d.curCode, d.curCustom,
-                        d.showCode, d.label);
+                final BalanceApi.Result r = BalanceApi.query(MainActivity.this, snap.base, snap.path,
+                        snap.key, snap.header, snap.prefix, snap.extract, snap.curCode,
+                        snap.curCustom, snap.showCode, snap.label);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        testing = false;
-                        btnTest.setEnabled(true);
-                        showResult(r, d);
+                        if (tvTest == null) return;
+                        if (!r.ok) {
+                            tvTest.setTextColor(theme.err());
+                            tvTest.setText("没成功：" + r.error);
+                            return;
+                        }
+                        String sym = r.currency == null ? "" : r.currency;
+                        tvTest.setTextColor(r.error.isEmpty() ? theme.ok() : theme.sub());
+                        tvTest.setText("成功：读到 " + sym + r.amount
+                                + "（取值 " + r.usedPath + "）"
+                                + (r.error.isEmpty() ? "" : "｜注意：" + r.error));
                     }
                 });
             }
         }).start();
     }
 
-    private void showResult(BalanceApi.Result r, Prefs.Draft d) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("GET ").append(BalanceApi.join(d.base, d.path)).append('\n');
-        String hn = d.header == null || d.header.isEmpty() ? "Authorization" : d.header;
-        sb.append("请求头 ").append(hn).append(": ");
-        sb.append(d.key.isEmpty() ? "(未填)" : mask(d.key)).append('\n');
-        sb.append("取值字段 ").append(r.usedPath == null ? "-" : r.usedPath).append("\n\n");
-        String raw = r.raw == null ? "" : r.raw.trim();
-        if (raw.length() > 1500) raw = raw.substring(0, 1500) + "\n…（已截断）";
-        sb.append(raw.isEmpty() ? "(没有返回内容)" : raw);
-        tvRaw.setText(sb.toString());
-        tvRawToggle.setVisibility(View.VISIBLE);
-        tvRawToggle.setText("查看接口原始返回 ▾");
-
-        if (r.ok) {
-            String extra = r.available ? "" : "\n注意：接口显示该账户当前不可用。";
-            setStatus("测试成功\n当前余额：" + r.currency + r.amount
-                    + "\n取值字段：" + r.usedPath + extra, 1);
-        } else {
-            setStatus("测试没通过\n" + r.error, 2);
-        }
-    }
-
-    private String mask(String k) {
-        if (k.length() <= 10) return "****";
-        return k.substring(0, 6) + "…" + k.substring(k.length() - 4);
-    }
-
-    private void updateUi() {
-        boolean run = Prefs.running(this);
-        if (btnRun != null) btnRun.setText(run ? "保存并刷新气泡" : "保存并显示气泡");
-        if (btnStop != null) btnStop.setText(run ? "关闭气泡（当前运行中）" : "关闭气泡");
-        if (!run && statusBox != null && statusBox.getVisibility() != View.VISIBLE) {
-            String last = Prefs.lastAmount(this);
-            String err = Prefs.lastInfo(this);
-            if (err != null && err.length() > 0) {
-                setStatus("上次查询失败：\n" + err, 2);
-            } else if (last != null && last.length() > 0 && !"--".equals(last)) {
-                setStatus("上次查询结果 " + last, 0);
-            }
-        }
-    }
-
-    // ================= 权限 =================
-
-    private boolean hasOverlay() {
-        if (Build.VERSION.SDK_INT < 23) return true;
-        if (Settings.canDrawOverlays(this)) return true;
-        android.app.AppOpsManager am = (android.app.AppOpsManager)
-                getSystemService(Context.APP_OPS_SERVICE);
+    /**
+     * 把当前设置导成一段文本放进剪贴板（换手机、留个底用）。
+     *
+     * <p>导出的是存盘里的内容而不是界面上的控件的值，所以导入回来能完整还原。
+     * 文本里有 API Key，提示里说明一下。
+     */
+    private void copyConfig() {
         try {
-            Integer mode = (Integer) am.getClass()
-                    .getMethod("checkOpNoThrow", int.class, int.class, String.class)
-                    .invoke(am, 24, android.os.Process.myUid(), getPackageName());
-            return mode != null && mode.intValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private void askOverlay() {
-        toast("请在系统页面里允许「显示在其他应用上层」，回来后再点一次");
-        try {
-            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName())));
-        } catch (Exception e) {
-            try {
-                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
-            } catch (Exception e2) {
-                toast("请到系统设置 → 应用 → 特殊权限里授予悬浮窗权限");
+            JSONObject box = new JSONObject();
+            box.put("app", "balance-bubble");
+            box.put("version", versionName());
+            JSONObject prefs = new JSONObject();
+            for (Map.Entry<String, ?> e : Prefs.get(this).getAll().entrySet()) {
+                if (isVolatile(e.getKey())) continue;
+                prefs.put(e.getKey(), e.getValue());
             }
+            box.put("prefs", prefs);
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("balance-bubble", box.toString(2)));
+            toast("配置已复制到剪贴板。里面有 API Key，别外传。");
+        } catch (Exception e) {
+            toast("导出失败：" + e);
         }
     }
 
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    /** 从剪贴板读回一份 {@link #copyConfig()} 导出的文本，覆盖当前设置。 */
+    private void importConfig() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            ClipData clip = cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) {
+                toast("剪贴板是空的");
+                return;
+            }
+            CharSequence text = clip.getItemAt(0).coerceToText(this);
+            JSONObject box = new JSONObject(text.toString().trim());
+            JSONObject prefs = box.optJSONObject("prefs");
+            if (prefs == null) prefs = box;
+            SharedPreferences.Editor ed = Prefs.get(this).edit();
+            int n = 0;
+            for (Iterator<String> it = prefs.keys(); it.hasNext(); ) {
+                String k = it.next();
+                if (isVolatile(k)) continue;
+                Object v = prefs.get(k);
+                if (v instanceof Boolean) ed.putBoolean(k, (Boolean) v);
+                else if (v instanceof Integer) ed.putInt(k, (Integer) v);
+                else if (v instanceof Number) ed.putFloat(k, ((Number) v).floatValue());
+                else ed.putString(k, String.valueOf(v));
+                n++;
+            }
+            ed.apply();
+            cfg = Prefs.load(this);
+            toast("导入完成，覆盖了 " + n + " 项设置");
+            rebuild();
+        } catch (Exception e) {
+            toast("这段文字不像配置备份，没敢动现有设置");
+        }
+    }
+
+    /** 全部恢复出厂设置（密钥也会清掉），只保留桌宠的开着/关着和它现在待的位置。 */
+    private void resetAll() {
+        boolean on = Prefs.running(this);
+        float x = Prefs.posX(this);
+        float y = Prefs.posY(this);
+        Prefs.get(this).edit().clear().apply();
+        Prefs.setRunning(this, on);
+        if (x >= 0 && y >= 0) Prefs.setPos(this, x, y);
+        cfg = Prefs.load(this);
+        toast("已恢复默认设置");
+        rebuild();
+    }
+
+    /** 运行状态（开关、最近一次余额、窗口位置）不进备份。 */
+    private static boolean isVolatile(String key) {
+        return "running".equals(key) || "last".equals(key) || "lastinfo".equals(key)
+                || "lasterr".equals(key) || "px".equals(key) || "py".equals(key);
+    }
+
+    /** 版本号从 manifest 里读，免得和生成脚本里写的不一致。 */
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    // ==================== ① 连接 ====================
+
+    /** 服务商、密钥与接口细节。改完即时存盘，不需要点保存。 */
+    private void tabConn() {
+        LinearLayout card = ui.card();
+        card.addView(ui.cardTitle("余额来源"));
+        card.addView(ui.hint("选一个内置服务商，接口细节自动填好；选「自定义」就自己写。"));
+
+        spPreset = ui.choiceRow(card, "服务商", null, Presets.NAMES, Presets.indexOfName(cfg.provider),
+                new AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                        if (building || pos == Presets.indexOfName(cfg.provider)) return;
+                        cfg.provider = Presets.NAMES[pos];
+                        cfg.label = Presets.label(pos);
+                        if (!Presets.isCustom(pos)) {
+                            cfg.base = Presets.base(pos);
+                            cfg.path = Presets.path(pos);
+                            cfg.extract = Presets.extract(pos);
+                            cfg.curCode = Presets.currency(pos);
+                        }
+                        apply();
+                        rebuild();
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> p) {
+                    }
+                });
+        card.addView(ui.hint(Presets.note(Presets.indexOfName(cfg.provider))));
+        page.addView(card);
+
+        // ---- 密钥 ----
+        LinearLayout keyCard = ui.card();
+        keyCard.addView(ui.cardTitle("API Key"));
+        etKey = addField(keyCard, "密钥（只存在本机）", cfg.key, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.key = s.trim();
+                apply();
+            }
+        });
+        etKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyCard.addView(ui.hint("密钥只保存在本机 SharedPreferences 里，不会上传到任何地方。"));
+        LinearLayout keyRow = new LinearLayout(this);
+        keyRow.setOrientation(LinearLayout.HORIZONTAL);
+        keyRow.setPadding(0, ui.dp(10), 0, 0);
+        btnShowKey = ui.button("显示", false);
+        btnShowKey.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                keyShown = !keyShown;
+                etKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                        | (keyShown ? 0 : android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD));
+                etKey.setSelection(etKey.getText().length());
+                btnShowKey.setText(keyShown ? "隐藏" : "显示");
+            }
+        });
+        keyRow.addView(btnShowKey);
+        ui.buttonRow(keyRow, "立即测试", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                testNow();
+            }
+        });
+        keyCard.addView(keyRow);
+        tvTest = ui.hint("");
+        LinearLayout.LayoutParams tp = ui.wrap();
+        tp.topMargin = ui.dp(8);
+        tvTest.setLayoutParams(tp);
+        keyCard.addView(tvTest);
+        page.addView(keyCard);
+
+        // ---- 币种 ----
+        LinearLayout curCard = ui.card();
+        curCard.addView(ui.cardTitle("币种"));
+        curCard.addView(ui.hint("接口没返回币种时用哪个符号。选「自动识别」就看金额里有没有 ¥/$ 之类的符号。"));
+        String[] labels = new String[Currencies.NAMES.length];
+        for (int i = 0; i < labels.length; i++) labels[i] = Currencies.label(i);
+        curCard.addView(ui.gap(4));
+        spCurrency = ui.spinner(labels);
+        spCurrency.setSelection(Currencies.indexOfCode(cfg.curCode));
+        spCurrency.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                if (building) return;
+                cfg.curCode = Currencies.code(pos);
+                apply();
+                fillPreview();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> p) {
+            }
+        });
+        curCard.addView(spCurrency);
+        final EditText etSym = addField(curCard, "自定义符号（选「自定义」时用）",
+                cfg.curCustom, new Field() {
+                    @Override
+                    public void set(String s) {
+                        cfg.curCustom = s;
+                        apply();
+                    }
+                });
+        etSym.setVisibility(Currencies.isCustom(Currencies.indexOfCode(cfg.curCode))
+                ? View.VISIBLE : View.GONE);
+        page.addView(curCard);
+
+        // ---- 接口细节 ----
+        LinearLayout adv = ui.card();
+        adv.addView(ui.cardTitle("接口细节"));
+        adv.addView(ui.hint("换了服务商之后这几项会自动填好，一般不用动。接口不是标准格式时再改。"));
+        addField(adv, "Base URL", cfg.base, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.base = s.trim();
+                apply();
+            }
+        });
+        addField(adv, "余额接口路径", cfg.path, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.path = s.trim();
+                apply();
+            }
+        });
+        addField(adv, "金额字段路径（JSON 点号路径）", cfg.extract, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.extract = s.trim();
+                apply();
+            }
+        });
+        addField(adv, "请求头（Name: Value，一行一个）", cfg.header, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.header = s;
+                apply();
+            }
+        });
+        addField(adv, "金额前缀", cfg.prefix, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.prefix = s;
+                apply();
+            }
+        });
+        page.addView(adv);
+    }
+
+    // ==================== ② 气泡 ====================
+
+    /** 气泡的内容、尺寸、配色与出现方式。 */
+    private void tabBubble() {
+        // ---- 内容 ----
+        LinearLayout c1 = ui.card();
+        c1.addView(ui.cardTitle("气泡内容"));
+        c1.addView(ui.switchRow("显示标题行", "气泡上方那行小字，例如「鲸鱼账户 余额」",
+                cfg.showTitle, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.showTitle = on;
+                        applyLive();
+                    }
+                }));
+        c1.addView(ui.divider());
+        c1.addView(ui.switchRow("显示币种代码", "在金额后面补一个 CNY / USD 这样的代码，免得 ¥ 认错",
+                cfg.showCode, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.showCode = on;
+                        applyLive();
+                    }
+                }));
+        c1.addView(ui.divider());
+        addField(c1, "标题里的名字", cfg.label, new Field() {
+            @Override
+            public void set(String s) {
+                cfg.label = s.trim();
+                applyLive();
+            }
+        });
+        page.addView(c1);
+
+        // ---- 预览文字：直接看自适应效果 ----
+        LinearLayout c2 = ui.card();
+        c2.addView(ui.cardTitle("预览文字"));
+        c2.addView(ui.hint("在框里随便打点字，上面的气泡会实时跟着改宽度、折行、缩字号。"
+                + "试试只打一个「¥1」，或者打一长串字。"));
+        sampleInput = addField(c2, "气泡里显示什么", sample, new Field() {
+            @Override
+            public void set(String s) {
+                sample = s;
+                fillPreview();
+            }
+        });
+        LinearLayout quick = new LinearLayout(this);
+        quick.setOrientation(LinearLayout.HORIZONTAL);
+        quick.setPadding(0, ui.dp(10), 0, 0);
+        ui.buttonRow(quick, "短金额", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sampleInput.setText("¥33.83");
+            }
+        });
+        ui.buttonRow(quick, "长提示", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sampleInput.setText("查询失败：HTTP 401 Unauthorized");
+            }
+        });
+        ui.buttonRow(quick, "超长", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sampleInput.setText("余额 ¥1234567.89，已经连续 30 天没有充值了，要不要补一点呢？");
+            }
+        });
+        c2.addView(quick);
+        page.addView(c2);
+
+        // ---- 尺寸与自适应 ----
+        LinearLayout c3 = ui.card();
+        c3.addView(ui.cardTitle("尺寸与自适应"));
+        c3.addView(ui.hint("气泡先按基准字号排版；排不下就先缩字号，缩到最小字号还排不下就把行数放宽"
+                + "（最多 8 行），实在放不下才截断。宽度始终跟着文字走，只有上限由你定。"));
+        addSlider(c3, "最大宽度", "气泡最胖能到多宽", 140, 340, cfg.bubbleMaxW,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleMaxW = v;
+                    }
+                });
+        addSlider(c3, "基准字号", "短文字的默认大小", 14, 30, cfg.bubbleFont,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleFont = v;
+                    }
+                });
+        addSlider(c3, "最小字号", "长文字缩到这个大小就不再缩了", 10, 22, cfg.bubbleMinFont,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleMinFont = Math.min(v, cfg.bubbleFont);
+                    }
+                });
+        addSlider(c3, "最多几行", "超过行数就把气泡长高", 1, 6, cfg.bubbleLines,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + " 行";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleLines = v;
+                    }
+                });
+        addSlider(c3, "内边距", "文字离气泡边缘的空隙，上下按比例跟着走", 6, 22, cfg.bubblePadH,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubblePadH = v;
+                        cfg.bubblePadT = Math.max(4, Math.round(v * 0.6f));
+                        cfg.bubblePadB = Math.max(4, Math.round(v * 0.73f));
+                    }
+                });
+        addSlider(c3, "圆角", "0 就是方角", 0, 28, cfg.bubbleRadius,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v == 0 ? "方角" : v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleRadius = v;
+                    }
+                });
+        page.addView(c3);
+
+        // ---- 配色 ----
+        LinearLayout c4 = ui.card();
+        c4.addView(ui.cardTitle("配色"));
+        final Ui.Swatches themeSw = ui.swatchRow("主题色", "整个设置页和气泡的强调色",
+                Theme.accentPalette(), cfg.theme, new Ui.OnPick() {
+                    @Override
+                    public void onPick(int i) {
+                        cfg.theme = i;
+                        apply();
+                        rebuild();
+                    }
+                });
+        c4.addView(themeSw.row);
+        c4.addView(ui.divider());
+        final Ui.Segment darkSeg = ui.segment(Theme.MODE_NAMES, cfg.dark, new Ui.OnPick() {
+            @Override
+            public void onPick(int i) {
+                cfg.dark = i;
+                apply();
+                rebuild();
+            }
+        });
+        c4.addView(ui.titled("深浅模式", "设置页和气泡的底色，跟随系统会跟着手机的黑夜模式走"));
+        LinearLayout.LayoutParams dp1 = ui.wrap();
+        dp1.topMargin = ui.dp(8);
+        darkSeg.row.setLayoutParams(dp1);
+        c4.addView(darkSeg.row);
+        c4.addView(ui.divider());
+        final Ui.Swatches bgSw = ui.swatchRow("气泡底色", "选「自动」就跟着深浅模式走",
+                Theme.SWATCH, cfg.bubbleBg, new Ui.OnPick() {
+                    @Override
+                    public void onPick(int i) {
+                        cfg.bubbleBg = i;
+                        applyLive();
+                    }
+                });
+        c4.addView(bgSw.row);
+        addSlider(c4, "不透明度", "让气泡半透明一点", 40, 100, Math.round(cfg.bubbleAlpha * 100f),
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "%";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleAlpha = v / 100f;
+                    }
+                });
+        c4.addView(ui.switchRow("柔和阴影", "气泡底下加一层淡淡投影，浅色背景上更清楚",
+                cfg.bubbleShadow, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.bubbleShadow = on;
+                        applyLive();
+                    }
+                }));
+        c4.addView(ui.divider());
+        addSlider(c4, "尖角长度", "气泡指着角色的那个小三角，0 就是不要尖角", 0, 16, cfg.bubbleTail,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v == 0 ? "无尖角" : v + "dp";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleTail = v;
+                    }
+                });
+        final Ui.Segment tailSeg = ui.segment(new String[]{"尖角朝下", "尖角朝上"},
+                cfg.bubbleTailUp ? 1 : 0, new Ui.OnPick() {
+                    @Override
+                    public void onPick(int i) {
+                        cfg.bubbleTailUp = i == 1;
+                        applyLive();
+                    }
+                });
+        c4.addView(ui.titled("尖角方向", "朝下＝气泡挂在角色头顶；朝上＝角色在上、气泡在下"));
+        LinearLayout.LayoutParams tp2 = ui.wrap();
+        tp2.topMargin = ui.dp(8);
+        tailSeg.row.setLayoutParams(tp2);
+        c4.addView(tailSeg.row);
+        page.addView(c4);
+
+        // ---- 出现方式 ----
+        LinearLayout c5 = ui.card();
+        c5.addView(ui.cardTitle("出现方式"));
+        addSlider(c5, "停留时长", "自动收起前停留多久", 2, 30, cfg.bubbleHideMs / 1000,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + " 秒";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleHideMs = v * 1000;
+                    }
+                });
+        c5.addView(ui.switchRow("弹出动画", "气泡大小变化时走一段过场，关掉就是瞬间出现",
+                cfg.bubbleAnim, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.bubbleAnim = on;
+                        applyLive();
+                    }
+                }));
+        addSlider(c5, "动画时长", "过场走多久", 60, 500, cfg.bubbleAnimMs,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v + "ms";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.bubbleAnimMs = v;
+                    }
+                });
+        page.addView(c5);
+    }
+
+    // ==================== ③ 角色 ====================
+
+    /** 模式、外观、互动方式与刷新节奏。 */
+    private void tabPet() {
+        LinearLayout c1 = ui.card();
+        c1.addView(ui.cardTitle("模式"));
+        final Ui.Segment modeSeg = ui.segment(Prefs.MODE_NAMES, cfg.mode, new Ui.OnPick() {
+            @Override
+            public void onPick(int i) {
+                cfg.mode = i;
+                apply();
+                rebuild();
+            }
+        });
+        LinearLayout.LayoutParams mp = ui.wrap();
+        mp.topMargin = ui.dp(8);
+        modeSeg.row.setLayoutParams(mp);
+        c1.addView(modeSeg.row);
+        c1.addView(ui.hint(Prefs.modeNote(cfg.mode)));
+        page.addView(c1);
+
+        LinearLayout c2 = ui.card();
+        c2.addView(ui.cardTitle("角色"));
+        c2.addView(ui.switchRow("显示角色", "关掉就只剩一个气泡挂在桌面上",
+                cfg.showChar, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.showChar = on;
+                        applyLive();
+                    }
+                }));
+        c2.addView(ui.divider());
+        addSlider(c2, "角色大小", "屏幕上占多宽", 64, 140, cfg.charSize, new Ui.Fmt() {
+            @Override
+            public String text(int v) {
+                return v + "dp";
+            }
+        }, new IntSetter() {
+            @Override
+            public void set(int v) {
+                cfg.charSize = v;
+            }
+        });
+        c2.addView(ui.switchRow("角色动作", "眨眼、甩尾、挥手这些骨架形变，关掉就是一张静态立绘",
+                cfg.animate, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.animate = on;
+                        applyLive();
+                    }
+                }));
+        c2.addView(ui.divider());
+        final Ui.Segment idleSeg = ui.segment(Prefs.IDLE_NAMES, cfg.petIdle, new Ui.OnPick() {
+            @Override
+            public void onPick(int i) {
+                cfg.petIdle = i;
+                applyLive();
+            }
+        });
+        c2.addView(ui.titled("活泼度", "越活泼，待机时自己动一动的次数越多"));
+        LinearLayout.LayoutParams ip = ui.wrap();
+        ip.topMargin = ui.dp(8);
+        idleSeg.row.setLayoutParams(ip);
+        c2.addView(idleSeg.row);
+        page.addView(c2);
+
+        LinearLayout c3 = ui.card();
+        c3.addView(ui.cardTitle("互动"));
+        ui.choiceRow(c3, "点击角色", "用「按模式」最省心：桌宠模式说句话，token 模式刷新余额",
+                Prefs.TAP_NAMES, cfg.tapAction, new AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                        if (building) return;
+                        cfg.tapAction = pos;
+                        apply();
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> p) {
+                    }
+                });
+        ui.choiceRow(c3, "长按角色", "默认长按打开这个设置页",
+                Prefs.LONG_NAMES, cfg.longTapAction, new AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                        if (building) return;
+                        cfg.longTapAction = pos;
+                        apply();
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> p) {
+                    }
+                });
+        addSlider(c3, "自动说话间隔", "0 就是不主动说话", 0, 30, cfg.talkSec / 15,
+                new Ui.Fmt() {
+                    @Override
+                    public String text(int v) {
+                        return v == 0 ? "不主动说话" : (v * 15) + " 秒";
+                    }
+                }, new IntSetter() {
+                    @Override
+                    public void set(int v) {
+                        cfg.talkSec = v * 15;
+                    }
+                });
+        page.addView(c3);
+
+        LinearLayout c4 = ui.card();
+        c4.addView(ui.cardTitle("刷新"));
+        addSlider(c4, "自动刷新间隔", "隔多久悄悄查一次余额", 1, 60, cfg.interval, new Ui.Fmt() {
+            @Override
+            public String text(int v) {
+                return v + " 分钟";
+            }
+        }, new IntSetter() {
+            @Override
+            public void set(int v) {
+                cfg.interval = v;
+            }
+        });
+        c4.addView(ui.switchRow("余额变化提醒", "混合模式下静默刷新时发现金额变了，主动冒个泡",
+                cfg.notice, new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                        if (building) return;
+                        cfg.notice = on;
+                        apply();
+                    }
+                }));
+        page.addView(c4);
+    }
+
+    // ==================== ④ 关于 ====================
+
+    /** 用法说明、配置导入导出和重置。 */
+    private void tabAbout() {
+        LinearLayout c1 = ui.card();
+        c1.addView(ui.cardTitle("怎么用"));
+        c1.addView(ui.text("• 拖动角色可以把它挪到屏幕任意位置，松手就记住\n"
+                + "• 点角色按上面设好的动作走；气泡开着的时候点气泡＝立刻收起\n"
+                + "• 长按角色默认打开这个设置页\n"
+                + "• 想让角色彻底消失，先把「显示角色」关掉，再关掉顶部的主开关", 13f, ui.themeTxt()));
+        page.addView(c1);
+
+        LinearLayout c2 = ui.card();
+        c2.addView(ui.cardTitle("权限与隐私"));
+        c2.addView(ui.text("• 需要「显示在其他应用上层」才能把角色浮在桌面上\n"
+                + "• 需要「通知」权限只是为了前台服务不被系统杀掉，不会有推送\n"
+                + "• API Key 只写在本机 SharedPreferences，不会发给任何第三方", 13f, ui.themeTxt()));
+        page.addView(c2);
+
+        LinearLayout c3 = ui.card();
+        c3.addView(ui.cardTitle("配置搬家"));
+        c3.addView(ui.hint("把当前全部设置导成一段文本，换手机或者想留个底的时候很有用。"
+                + "密钥也会一起导出，注意别外传。"));
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+        row1.setPadding(0, ui.dp(10), 0, 0);
+        ui.buttonRow(row1, "复制配置", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                copyConfig();
+            }
+        });
+        ui.buttonRow(row1, "从剪贴板导入", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                importConfig();
+            }
+        });
+        c3.addView(row1);
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.setPadding(0, ui.dp(4), 0, 0);
+        ui.buttonRow(row2, "角色归位", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Prefs.clearPos(MainActivity.this);
+                send(BubbleService.ACTION_RESET_POS);
+                toast("已经挪回屏幕中间");
+            }
+        });
+        ui.buttonRow(row2, "恢复默认设置", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                resetAll();
+            }
+        });
+        c3.addView(row2);
+        page.addView(c3);
+
+        LinearLayout c4 = ui.card();
+        c4.addView(ui.cardTitle("版本"));
+        c4.addView(ui.text("鲸鱼娘桌宠 " + versionName(), 13.5f, ui.themeTxt()));
+        c4.addView(ui.hint("主题、气泡尺寸、互动方式都在这里改，改完立刻生效，不用重启应用。"));
+        page.addView(c4);
     }
 }

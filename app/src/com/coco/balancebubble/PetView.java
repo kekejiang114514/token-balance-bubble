@@ -49,6 +49,11 @@ public class PetView extends View {
     private static final long IDLE_MIN_MS = 3200L; // 待机随机动作间隔
     private static final long IDLE_MAX_MS = 7200L;
 
+    /** 活泼度：0 安静 / 1 适中 / 2 活泼。只影响待机动作的间隔。 */
+    private int idleLevel = 1;
+    /** 活泼度对应的间隔系数：安静就拉长，活泼就缩短（与 Prefs.idleScale 一致）。 */
+    private static final float[] IDLE_K = {1.8f, 1.0f, 0.55f};
+
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
     private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF shadowRect = new RectF();
@@ -93,6 +98,23 @@ public class PetView extends View {
             play(PetAction.IDLE);
         }
         invalidate();
+    }
+
+    /** 设置活泼度（0 安静 / 1 适中 / 2 活泼）：越活泼，待机随机动作来得越勤。 */
+    public void setIdleLevel(int lv) {
+        idleLevel = lv < 0 ? 0 : (lv > 2 ? 2 : lv);
+        nextIdleAt = 0;
+    }
+
+    public int idleLevel() {
+        return idleLevel;
+    }
+
+    /** 下一次待机动作还有多久（已按活泼度缩放）。 */
+    private long idleDelay() {
+        long span = IDLE_MAX_MS - IDLE_MIN_MS;
+        long base = IDLE_MIN_MS + (span <= 0 ? 0 : random.nextInt((int) span));
+        return (long) (base * IDLE_K[idleLevel]);
     }
 
     public boolean isAnimated() {
@@ -229,7 +251,7 @@ public class PetView extends View {
             if (now >= nextIdleAt) {
                 PetAction[] pool = PetAction.idlePool();
                 play(pool[random.nextInt(pool.length)]);
-                nextIdleAt = now + IDLE_MIN_MS + random.nextInt((int) (IDLE_MAX_MS - IDLE_MIN_MS));
+                nextIdleAt = now + idleDelay();
             }
             return;
         }

@@ -14,13 +14,16 @@ javac -nowarn -encoding UTF-8 -source 8 -target 8 -d $OUT \
   app/src/com/coco/balancebubble/PetAction.java \
   app/src/com/coco/balancebubble/PetTalk.java \
   app/src/com/coco/balancebubble/TextWrap.java \
+  app/src/com/coco/balancebubble/Theme.java \
+  app/src/com/coco/balancebubble/BubbleLayout.java \
   app/src/com/coco/balancebubble/RigModel.java \
   app/src/com/coco/balancebubble/PartRig.java \
+  test/SettingsKitTest.java \
   test/CurrencyTest.java test/PetTalkTest.java test/TextWrapTest.java \
   test/RigAnim.java test/PartRigTest.java test/RigGoldenTest.java test/RigAnimTest.java
 
 failed=0
-for t in CurrencyTest PetTalkTest TextWrapTest PartRigTest RigGoldenTest RigAnimTest; do
+for t in SettingsKitTest CurrencyTest PetTalkTest TextWrapTest PartRigTest RigGoldenTest RigAnimTest; do
   echo "==================== $t ===================="
   if ! java -cp $OUT $t; then
     failed=1
