@@ -388,6 +388,11 @@ public class Ui {
                 return false;
             }
         });
+        // 滑杆本体（= 真正能拖的那个控件）也必须挂进这一行，否则整行只剩标题和数值，
+        // 参数就永远调不了 —— value_label 也永远不会变。
+        box.addView(s.bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         s.bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {

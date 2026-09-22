@@ -33,6 +33,13 @@ for t in SettingsKitTest CurrencyTest PetTalkTest TextWrapTest VersionTest Viewp
   fi
 done
 
+# 源码级审计：有没有「造了控件但没挂进视图树」——这类 bug 编译能过、
+# 单测也测不到（要真跑界面才看得出来），但表现是「参数怎么调都没反应」。
+echo "==================== 控件挂载审计 ===================="
+if ! python3 tools/audit_ui.py; then
+  failed=1
+fi
+
 if [ $failed -eq 0 ]; then
   echo "==================== 全部测试通过 ===================="
 else
