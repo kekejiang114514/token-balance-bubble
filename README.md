@@ -22,6 +22,7 @@
 - **开机自启**：按上次的状态恢复，不需要每次手动打开
 - **零依赖**：不使用 AndroidX、Kotlin、Gradle，全部代码化布局，产物不到 500 KB
 - **密钥本地存放**：API Key 只存在应用私有目录，只有查询请求会发给服务商
+- **应用内检查更新**：设置页「关于」分页里可以查有没有新版本，查到能直接去下载或打开 Release 页面；不想要的版本可以「跳过这个版本」，之后不再提醒。每天最多自动查一次（GitHub 匿名接口有额度限制），手动点不受限制
 
 ## 支持的服务商
 
@@ -42,7 +43,10 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 
 | 版本 | 文件 | 大小 | SHA-256 |
 |---|---|---|---|
-| v1.7 | [balance-bubble-1.7.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.7/balance-bubble-1.7.apk) | 285 KB | `5d5ceec5…66ce` |
+| v1.10 | [balance-bubble-1.10.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.10/balance-bubble-1.10.apk) | 304 KB | `84325386…7f6d` |
+| v1.9 | [balance-bubble-1.9.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.9/balance-bubble-1.9.apk) | 304 KB | `529e538b…430b` |
+| v1.8 | [balance-bubble-1.8.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.8/balance-bubble-1.8.apk) | 304 KB | `494f7566…0598` |
+| v1.7 | [balance-bubble-1.7.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.7/balance-bubble-1.7.apk) | 300 KB | `840c2f70…7a4c` |
 | v1.5 | [balance-bubble-1.5.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.5/balance-bubble-1.5.apk) | 281 KB | `bf9066b6…09f0` |
 | v1.4 | [balance-bubble-1.4.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.4/balance-bubble-1.4.apk) | 277 KB | `0a56b3c1…33a8` |
 | v1.3 | [balance-bubble-1.3.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.3/balance-bubble-1.3.apk) | 469 KB | `5c27986b…1b39` |
@@ -53,11 +57,11 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 安装前建议核对完整校验和：
 
 ```sh
-sha256sum balance-bubble-1.7.apk
-# bf9066b6946979567ac6ae0c84e3e59e7c0520672130e39e829c2a0bb33f09f0
+sha256sum balance-bubble-1.10.apk
+# 8432538646100080e8cbb554dd2be7da596154e1c55bd6c22d0524860d3d7f6d
 ```
 
-**版本关系**：七个版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留（v1.6 只出过内部构建、没有发布）。如果只想用最新版，装 v1.7 就行。
+**版本关系**：十个版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留（v1.6 只出过内部构建、没有发布）。如果只想用最新版，装 v1.10 就行。
 
 ## 使用
 
@@ -92,21 +96,18 @@ sha256sum balance-bubble-1.7.apk
 
 ## 界面说明
 
-设置页分成四张编号卡片，按顺序走一遍就能用起来。每个输入框下面都写了这个参数是干什么的、填错会看到什么报错。
+设置页顶部常驻**实时预览**（和桌面上的悬浮窗共用同一套渲染代码，改什么立刻能看到），下面分成四个分页，共 36 张卡片，每张卡片用一句话说明「调这个会怎样」：
 
-**高级设置默认折叠**，收进去的是这些东西，不确定就别展开：
-
-| 参数 | 作用 |
+| 分页 | 放什么 |
 |---|---|
-| 显示名称 | 气泡上那行小字，留空则只显示金额 |
-| Base URL | 接口域名，自定义服务商才需要改 |
-| 余额接口路径 | 返回 404 时多半是这里不对 |
-| 金额字段路径 | 留空则自动识别；形如 `balance_infos.0.total_balance` |
-| 认证头名称 / 前缀 | 默认 `Authorization: Bearer `，少数服务商不同 |
-| 自定义符号 | 币种选「自定义符号」时使用 |
-| 金额后补币种代码 | 打开后显示成 `33.83 CNY`，用于区分同为 ¥ 的人民币和日元 |
-| 把气泡放回默认位置 | 拖到找不回来的地方时用 |
-| 恢复默认参数 | 一键还原 |
+| **连接** | 服务商选择、接口地址、API Key、查询间隔、目标金额与提醒、余额的正负图标 |
+| **气泡** | 气泡宽度与字号、行数上限、内边距与圆角、底色与文字色、不透明度、尖角、显示/收起时长、是否显示名称和币种代码 |
+| **角色** | 显示哪块贴图、大小、位置、动作开关（眨眼 / 发丝随风 / 甩尾 / 挥手 / 呼吸）、待机几分钟换个动作、不透明度与翻转 |
+| **关于** | 当前版本、检查更新、打开发布页、应用信息、恢复默认参数 |
+
+分页栏固定在屏幕底部，滚到哪儿都在；每个分页会记住自己上次滚到的位置，切回来不会跳回顶部。
+
+不确定的参数（Base URL、余额接口路径、金额字段路径、认证头名称与前缀、自定义符号、金额后补币种代码）都放在对应分页里，卡片上都写了「填错会看到什么报错」。改坏了可以到「关于」分页点恢复默认参数。
 
 ## 币种
 
@@ -166,19 +167,26 @@ python3 tools/verify_apk.py out/app.apk
 ```
 app/
   src/com/coco/balancebubble/
-    MainActivity.java    设置界面（四张卡片 + 高级区 + 实时预览）
-    BubbleService.java   前台服务 + 悬浮窗管理 + 拖拽与位置持久化
+    MainActivity.java    设置界面（四个分页 / 36 张卡片 / 顶部实时预览）
+    BubbleService.java   前台服务 + 悬浮窗管理 + 拖拽与位置持久化 + 监听设置变化
     BubbleView.java      气泡绘制（圆角矩形 + 下方尖角 + 文字自适应与尺寸动画）
     PetView.java         角色贴图渲染：支点变换、动作播放、影子、网格形变合成
     PetAction.java       动作清单与时长（纯逻辑，可单测）
-    PartRig.java         局部形变：24×24 段网格 + 14 个权重场驱动（眨眼/发丝/甩尾/挥手/呼吸，纯逻辑可单测）
+    PetTalk.java         桌宠卖萌语料（纯逻辑，可单测）
+    PartRig.java         局部形变：24×24 网格（625 顶点）+ 14 个驱动量（眨眼/发丝/甩尾/挥手/呼吸，纯逻辑可单测）
     RigModel.java        骨架常量（由 tools/gen_rig_java.py 从 tools/rig_math.py 生成，别手改）
+    BubbleLayout.java    气泡排版（换行、行宽、圆角与尖角几何，纯逻辑可单测）
+    BubbleStyle.java     设置项 → 绘制参数的单通道转换
     TextWrap.java        中英混排断行（纯逻辑，可单测）
+    Theme.java           主题色板与深浅模式（纯逻辑，可单测对比度）
+    Ui.java              代码化布局控件工厂（卡片/按钮/开关/滑杆/色板/分段控件）
+    Viewport.java        视口算术：滚动位置钳位、预览高度（纯逻辑，可单测）
+    Version.java         版本号解析与比大小（纯逻辑，可单测）
+    UpdateChecker.java   检查 GitHub Releases 有没有新版本
     BalanceApi.java      HTTP 请求、JSON 解析、字段自动识别、错误归类
     Prefs.java           设置项读写
     Presets.java         服务商预设
     Currencies.java      货币表与符号规则
-    Ui.java              代码化布局控件工厂
     BootReceiver.java    开机自启
   assets/char.png        角色贴图（立绘抠白底后的透明 PNG，pngquant 量化）
   res/mipmap/ic_launcher.png  应用图标（同一张立绘居中排版）
@@ -186,17 +194,23 @@ tools/                   构建脚本、骨架模型与验收套件
   rig_math.py            骨架模型的唯一事实来源（骨表、权重场、幅度上限、姿态表）
   gen_rig_java.py        由 rig_math.py 生成 app/src 里的 RigModel.java
   verify_rig.py          骨架验收套件（七节量化判据 + 黄金表 + 动画时间线）
+  audit_ui.py            源码级审计：查「造了控件但没挂进视图树」这类只在真机才暴露的 bug
   build.sh               切图/量化/生成 manifest/打包/签名，一键出 APK
-test/CurrencyTest.java   币种与预设的纯逻辑单测
-test/PetTalkTest.java    桌宠语料库与动作绑定的纯逻辑单测
-test/TextWrapTest.java   气泡断行的纯逻辑单测
-test/PartRigTest.java    网格形变的纯逻辑单测（权重场、保护区、连续性、稳定性）
-test/RigGoldenTest.java  Java 侧读黄金表逐点比对骨架常量
-test/RigAnimTest.java    Java 侧按真实时间线播放动画并落盘采样（给验收套件用）
-test/rig_golden.txt      黄金表：39 个状态 ×169 个采样点的位移与权重
-test/rig_anim_samples.txt 动画采样：1927 帧 ×14 个驱动量
-tools/run_tests.sh       一键跑全部单测
-releases/                历史版本 APK
+  axml_build.py arsc_build.py manifest_gen.py pack_apk.py   无 SDK 构建链的四步
+  verify_apk.py          用 androguard 独立校验产物
+test/SettingsKitTest.java  主题对比度、气泡排版硬约束、币种代号往返的纯逻辑单测
+test/CurrencyTest.java     币种与预设的纯逻辑单测
+test/PetTalkTest.java      桌宠语料库与动作绑定的纯逻辑单测
+test/TextWrapTest.java     气泡断行的纯逻辑单测
+test/ViewportTest.java     滚动钳位与预览高度的纯逻辑单测
+test/VersionTest.java      tag 解析与版本比较的纯逻辑单测
+test/PartRigTest.java      网格形变的纯逻辑单测（权重场、保护区、连续性、稳定性）
+test/RigGoldenTest.java    Java 侧读黄金表逐点比对骨架常量
+test/RigAnimTest.java      Java 侧按真实时间线播放动画并落盘采样（给验收套件用）
+test/rig_golden.txt        黄金表：39 个状态 ×169 个采样点的位移与权重
+test/rig_anim_samples.txt  动画采样：1927 帧 ×14 个驱动量
+tools/run_tests.sh         一键跑全部单测 + 控件挂载审计
+releases/                  各版本已签名的 APK（v1.0~v1.5、v1.7、v1.8、v1.9、v1.10）
 ```
 
 ## 测试
@@ -213,13 +227,21 @@ sh tools/run_tests.sh
 - **语料与动作**：语料库非空、无空句、无重复、句子不超长、随机抽 2000 次无连续重复、1000 次能覆盖全部语料；每句话都绑定了动作，动作不是 IDLE，且每个动作的播放时长都大于 0
 - **气泡断行**：放得下就不折、中文逐字断、英文按词断不切单词、标点不落行首、超出行数上限时末行加省略号，以及空文本、全空白、超长单词等边界
 - **网格形变**：网格尺寸与顶点数、权重场取值域与平滑度（无硬边）、脸与手是保护区（不会被发丝拖走）、眨眼只作用在眼部且半闭是一半位移、挥手时右手摆动而腕点几乎不动、甩尾时两侧长发同向摆动且越靠根部越小、形变连续性（网格不折叠、不夸张拉伸）以及 240 帧连续播放的数值稳定性
+- **设置页与主题**：主题色板在 6 种颜色 × 浅/深两档下的文字对比度（按 WCAG 3:1 判）、气泡排版硬约束（宽度/行数/字号/每行行宽，未截断时文字不丢）、币种代号与下标往返；视口算术（滚动位置钳位、预览高度随角色尺寸变化）
+- **版本号**：tag 解析（`v1.7` / `1.7-rc1` → `1.7`）、分段比大小（`1.10` 比 `1.9` 新、缺段补 0）、垃圾输入一律不判定为新版
+- **控件挂载审计**：`tools/audit_ui.py` 扫源码，找「造了控件但没挂进视图树」——这类 bug 编译能过、单测测不到，只有真跑界面才看得见（v1.10 修的那 13 条滑杆就是这么坏的）
 - **骨架验收**：单测之外还有一套 `python3 tools/verify_rig.py`（需要 Python 3 + numpy + Pillow），七节量化判据把 Python 侧模型和 Java 侧实现拉到一起对照——磁盘上的 `RigModel.java` 必须与生成器输出逐字节一致；14 个驱动量在 39 个状态 ×169 个采样点上的位移与 Java 逐点比对；轮廓内逐点检查局部伸缩（∈[0.55, 1.80]）、剪切（≤0.80）、渲染网格单元面积（≥0.25×）与单点位移（≤125px）；脸芯、颈根这些保护区不能被别的场拖走；每个动作都要有看得见的位移且不许串台；最后按 1927 帧的时间线逐帧复算，连最紧的一帧也要留出形变余量
+
+发布出去的 APK 与仓库源码是等价的：把对应 tag 的 `app/src` 取出来重新编译、转 dex，得到的 `classes.dex` 与发布 APK 里的逐字节相同（v1.7 / v1.8 / v1.9 / v1.10 都验过）。
 
 ## 版本历史
 
 见 [CHANGELOG.md](CHANGELOG.md)。简要来说：
 
-- **v1.7** —— 修复挥手时手掌前缘被压扁（最紧一帧的局部伸缩 0.45 → 0.63）、呼吸只带走肚子而胸口和脖子不动（胸口 1.8 → 3.65px、颈根 0 → 0.67px）、眨眼时左眼横向漂移 10px；骨架模型与验收套件重做（v1.6 是内部构建，没有发布）
+- **v1.10** —— 修掉「所有参数都调不了」的根因：`Ui.sliderRow()` 造出了 `SeekBar` 却没 `addView` 进父容器，13 条滑杆全都没显示、也无法拖动（自 v1.7 设置页重做起就存在）；新增源码级审计 `tools/audit_ui.py` 专门拦「造了控件但没挂进视图树」
+- **v1.9** —— 修切页签/切回应用弹回顶部（重画后等布局量完再还原滚动位置），页签栏改为固定在屏幕底部；预览里的角色尺寸、显隐、动作跟滑杆实时变；滑杆拖动不再被外层滚动抢手势
+- **v1.8** —— 应用内检查更新（设置页「关于」里可检查、可打开发布页、可跳过某个版本）；修 `UpdateChecker` 漏写包声明导致的编译失败；悬浮窗自己监听设置变化，启动改用 `startForegroundService`
+- **v1.7** —— 设置页重做为四个分页（连接 / 气泡 / 角色 / 关于）36 张卡片，顶部常驻实时预览；同时修复挥手时手掌前缘被压扁（最紧一帧的局部伸缩 0.45 → 0.63）、呼吸只带走肚子而胸口和脖子不动（胸口 1.8 → 3.65px、颈根 0 → 0.67px）、眨眼时左眼横向漂移 10px（v1.6 是内部构建，没有发布，改动并入本条）
 - **v1.5** —— 加上网格局部形变：眨眼、发丝随风、甩尾、挥手，脸和手是保护区；待机动作池扩到 10 种（动作共 13 种）
 - **v1.4** —— 角色换成原始立绘（自动抠白底）并加上整体骨架动作（漂浮、蹦跳、摇摆、转圈等 11 种，说话配动作），应用图标一并换成鲸鱼娘；气泡宽度跟着字数走、长句自动折行；模式细分为仅 token 查询 / 仅桌宠 / 混合模式，混合模式会在余额变化时主动提醒
 - **v1.3** —— 新增「token 查询模式」开关与桌宠模式（点角色随机说卖萌话、每分钟自动说一句），应用更名「鲸鱼娘桌宠」；气泡改为点击才弹出、7 秒后自动收起；查询余额时显示「正在刷新中…」
@@ -227,7 +249,7 @@ sh tools/run_tests.sh
 - **v1.1** —— 应用更名为「token 余额查询器」，内置角色贴图与桌面图标，扩展为六家服务商预设，金额路径与币种支持自动识别
 - **v1.0** —— 首个可用版本，支持 DeepSeek 余额查询与悬浮显示
 
-> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存，仓库中的 `app/src` 是 v1.7 的代码（v1.6 起的骨架模型也在其中）。
+> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存；仓库中的 `app/src` 是 v1.10 的代码（v1.6 起的骨架模型也在其中）。每个版本的源码都可以在对应的 tag 上取到：`git checkout v1.10`。
 
 ## 已知限制
 
@@ -238,7 +260,7 @@ sh tools/run_tests.sh
 - 角色动画是持续重绘，虽然限了 30fps 且在窗口不可见时停止，但长时间挂着仍会比静态角色多耗一点电；可以在设置里关掉「角色动作」
 - 角色是单张平面立绘，局部形变靠网格变形模拟，遮住的部分画不出来，幅度也有上限（见上文「角色的动作」）
 - 抠图用的是「与白底不连通的容差填充」，如果以后换成立绘背景不是纯白，或者角色内部有和背景同色又连通到边缘的区域，需要重新调参
-- 没有单元测试之外的真机自动化测试，拖拽手感之类的交互细节需要实际使用才能确认
+- 没有真机截图回归测试：验证靠单测 + 源码审计 + 用无障碍服务读屏/手势做少量端到端检查（Android 11 以下还不能用无障碍接口截图），拖拽手感之类的交互细节仍需实际使用才能确认
 
 ## 常见问题
 
