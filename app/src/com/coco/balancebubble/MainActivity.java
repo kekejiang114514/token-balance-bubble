@@ -6,6 +6,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
@@ -16,6 +17,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.AdapterView;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -46,6 +48,8 @@ public class MainActivity extends Activity {
 
     private ScrollView scroller;
     private LinearLayout page;
+    /** 常驻页签栏：贴在屏幕底部，内容滚到哪儿它都在。 */
+    private LinearLayout tabBar;
     private FrameLayout previewBox;
     private BubbleView previewBubble;
     private PetView previewPet;
@@ -57,6 +61,8 @@ public class MainActivity extends Activity {
     private int tab = 0;
     /** 每个页签上次滚到哪儿了（切回来时还原，不然每次都弹回顶部）。 */
     private final int[] tabScroll = new int[TAB_NAMES.length];
+    /** 待还原的滚动位置，-1 表示没有。要等这一轮布局量完再滚。 */
+    private int pendingScroll = -1;
     /** 关于页上的更新状态，切页签重建时用它回填。 */
     private TextView updStatus;
     private String updText = "";
@@ -108,19 +114,60 @@ public class MainActivity extends Activity {
         page.setPadding(0, 0, 0, ui.dp(28));
         scroller.addView(page, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        setContentView(scroller);
+
+        // 页签栏不跟内容一起滚：以前它长在滚动内容里，往下翻就看不见了，
+        // 想看某个页签得先滚回顶部 —— 那「记住滚动位置」也就没意义了。
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(theme.bg());
+        root.addView(scroller, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.VERTICAL);
+        root.addView(tabBar);
+        setContentView(root);
         buildAll();
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
-        if (!building) buildAll();
+        // 从桌面切回来（去瞅一眼角色大小改没改）不该整页重搭：重搭会把滚动位置顶回顶部。
+        // 只有跟随系统的深浅模式在后台翻页了才需要重画，其余情况轻量刷新就够。
+        if (!building) {
+            if (theme.dark != cfg.darkNow()) {
+                rebuild();
+            } else {
+                refreshStatus();
+                fillPreview();
+            }
+        }
         autoCheckUpdate();
     }
 
-    /** 整页重画：换主题、切标签、复位设置都走这里。 */
+    /**
+     * 清单里声明了 configChanges，系统翻深浅模式时不会重建这个 Activity，
+     * 得自己跟上；照样走 {@link #rebuild()}，滚动位置不会丢。
+     */
+    @Override
+    public void onConfigurationChanged(Configuration cfgNew) {
+        super.onConfigurationChanged(cfgNew);
+        if (!building && theme.dark != cfg.darkNow()) rebuild();
+    }
+
+    /** 重画整页，尽量留在原地（切页签、改主题、切深浅模式都走这里）。 */
     private void buildAll() {
+        buildAll(scroller == null ? 0 : scroller.getScrollY());
+    }
+
+    /**
+     * 整页重画，画完滚到 {@code keepScroll}。
+     *
+     * <p>重画会把内容全删了重加，滚动位置自然归零，所以要显式还原。注意不能
+     * 立刻 {@code scrollTo}：那一刻新的内容还没量过，ScrollView 会拿旧高度去钳，
+     * 结果就是滚回顶部 —— 必须等这一轮布局结束。
+     */
+    private void buildAll(int keepScroll) {
         building = true;
         updStatus = null;          // 详情见下方 tabAbout()：重建后由它重新挂上
         page.removeAllViews();
@@ -130,7 +177,33 @@ public class MainActivity extends Activity {
         addTabBody();
         building = false;
         refreshStatus();
+        restoreScroll(keepScroll);
     }
+
+    /** 记下目标位置，等布局量完再滚过去。 */
+    private void restoreScroll(final int y) {
+        pendingScroll = Math.max(0, y);
+        final ViewTreeObserver vto = scroller.getViewTreeObserver();
+        if (!vto.isAlive()) return;
+        vto.removeOnGlobalLayoutListener(layoutFixer);   // 连着重建两次也只挂一个
+        vto.addOnGlobalLayoutListener(layoutFixer);
+    }
+
+    /** 布局结束的回调：这时候 page 的高度才是新的，滚过去才钳不歪。 */
+    private final ViewTreeObserver.OnGlobalLayoutListener layoutFixer =
+            new ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override
+                public void onGlobalLayout() {
+                    ViewTreeObserver vto = scroller.getViewTreeObserver();
+                    if (vto.isAlive()) vto.removeOnGlobalLayoutListener(this);
+                    if (pendingScroll < 0) return;
+                    int want = pendingScroll;
+                    pendingScroll = -1;
+                    int window = scroller.getHeight()
+                            - scroller.getPaddingTop() - scroller.getPaddingBottom();
+                    scroller.scrollTo(0, Viewport.clampScroll(want, page.getHeight(), window));
+                }
+            };
     // ==================== 顶部 ====================
 
     /** 顶部横幅：名字、状态、启动/停止、立即刷新。 */
@@ -251,7 +324,7 @@ public class MainActivity extends Activity {
         card.addView(sampleInput);
 
         previewBox = new FrameLayout(this);
-        int h = ui.dp((int) (Prefs.charSize(this) * PetView.VIEW_H_RATIO) + 130);
+        int h = ui.dp(Viewport.previewHeight(cfg.charSize, PetView.VIEW_H_RATIO, 130));
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, h);
         fp.topMargin = ui.dp(10);
@@ -284,7 +357,13 @@ public class MainActivity extends Activity {
         fillPreview();
     }
 
-    /** 把当前设置 + 示例文字灌进预览里的气泡。 */
+    /**
+     * 把当前设置 + 示例文字灌进预览里的气泡。
+     *
+     * <p>尺寸类设置（角色大小、显示角色、动作）也要在这里一并落到视图上：
+     * 预览里角色的 LayoutParams 是建的时候一次性算好的，光改 {@code cfg} 不重排，
+     * 滑杆拖到头画面也不动 —— 看着就像「大小调不了」。
+     */
     private void fillPreview() {
         if (previewBubble == null) return;
         previewBubble.applyStyle(BubbleStyle.build(cfg, ui.density()));
@@ -292,6 +371,21 @@ public class MainActivity extends Activity {
                 ? cfg.label.trim() + " 余额" : "";
         previewBubble.setData(label, sample.isEmpty() ? " " : sample, false);
         previewBubble.setVisibility(View.VISIBLE);
+        if (previewPet != null) {
+            previewPet.setLayoutParams(new LinearLayout.LayoutParams(
+                    ui.dp(cfg.charSize), ui.dp((int) (cfg.charSize * PetView.VIEW_H_RATIO))));
+            previewPet.setAnimated(cfg.animate);
+            previewPet.setIdleLevel(cfg.petIdle);
+            previewPet.setVisibility(cfg.showChar ? View.VISIBLE : View.GONE);
+        }
+        if (previewBox != null && previewBox.getLayoutParams() instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams bp = (LinearLayout.LayoutParams) previewBox.getLayoutParams();
+            int h = ui.dp(Viewport.previewHeight(cfg.charSize, PetView.VIEW_H_RATIO, 130));
+            if (bp.height != h) {
+                bp.height = h;
+                previewBox.setLayoutParams(bp);
+            }
+        }
         if (tipLine != null) tipLine.setText(previewBubble.describe());
     }
     // ==================== 标签页 ====================
@@ -305,31 +399,30 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         bp.leftMargin = ui.dp(14);
         bp.rightMargin = ui.dp(14);
-        bp.topMargin = ui.dp(12);
+        bp.topMargin = ui.dp(9);
+        bp.bottomMargin = ui.dp(10);
         box.setLayoutParams(bp);
 
         tabs = ui.segment(TAB_NAMES, tab, new Ui.OnPick() {
             @Override
             public void onPick(int i) {
                 if (i == tab) return;
-                // 切页签会重建内容，滚动位置默认归零 —— 先把当前看到的记下来，切回来再还原。
-                tabScroll[tab] = scroller.getScrollY();
+                int leave = tab;
+                int want = tabScroll[i];
+                tabScroll[leave] = scroller.getScrollY();
                 tab = i;
-                buildAll();
-                final int want = tabScroll[i];
-                scroller.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        int content = page.getHeight();
-                        int window = scroller.getHeight()
-                                - scroller.getPaddingTop() - scroller.getPaddingBottom();
-                        scroller.scrollTo(0, Math.max(0, Math.min(want, content - window)));
-                    }
-                });
+                buildAll(want);
             }
         });
         box.addView(tabs.row);
-        page.addView(box);
+
+        tabBar.removeAllViews();
+        tabBar.setBackgroundColor(theme.card());
+        View line = new View(this);
+        line.setBackgroundColor(theme.line());
+        tabBar.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, ui.dp(1))));
+        tabBar.addView(box);
     }
 
     /** 当前标签页的内容（每个 tab 自己往 page 里加卡片）。 */
@@ -896,11 +989,11 @@ public class MainActivity extends Activity {
                         cfg.bubblePadB = Math.max(4, Math.round(v * 0.73f));
                     }
                 });
-        addSlider(c3, "圆角", "0 就是方角", 0, 28, cfg.bubbleRadius,
+        addSlider(c3, "圆角", "越小越方", 2, 28, cfg.bubbleRadius,
                 new Ui.Fmt() {
                     @Override
                     public String text(int v) {
-                        return v == 0 ? "方角" : v + "dp";
+                        return v <= 3 ? "方角" : v + "dp";
                     }
                 }, new IntSetter() {
                     @Override

@@ -5,6 +5,7 @@ import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -372,6 +373,21 @@ public class Ui {
         s.bar.setProgressTintList(ColorStateList.valueOf(th.accent()));
         s.bar.setThumbTintList(ColorStateList.valueOf(th.accent()));
         s.bar.setPadding(0, dp(6), 0, dp(6));
+        // 外面套着 ScrollView：手指横着拖滑杆时只要带一点上下抖动，
+        // ScrollView 就会把手势抢走去滚页面，滑杆拖到一半断掉。
+        // 手按在滑杆上的这段时间，明确告诉父容器别拦。
+        s.bar.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                int a = e.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) {
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                return false;
+            }
+        });
         s.bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {

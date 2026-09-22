@@ -17,7 +17,7 @@ E = B.Elem
 ANDROID_NS = 'http://schemas.android.com/apk/res/android'
 THEME_NO_ACTIONBAR = 0x0103012c   # @android:style/Theme.DeviceDefault.Light.NoActionBar
 
-CONFIG_CHANGES = 0x04A0           # orientation|screenSize|keyboardHidden
+CONFIG_CHANGES = 0x06A0           # orientation|screenSize|keyboardHidden|uiMode
 SOFT_INPUT_ADJUST_RESIZE = 0x10
 ICON_REF = 0x7F010000             # @mipmap/ic_launcher（见 arsc_build.py）
 
@@ -68,8 +68,8 @@ def main():
 
     root = E('manifest', attrs=[
         A(None, 'package', TYPE_STR, 'com.coco.balancebubble'),
-        an('versionCode', TYPE_INT_DEC, 10),
-        an('versionName', TYPE_STR, '1.8'),
+        an('versionCode', TYPE_INT_DEC, 11),
+        an('versionName', TYPE_STR, '1.9'),
     ], children=[
         E('uses-sdk', attrs=[
             an('minSdkVersion', TYPE_INT_DEC, 23),

@@ -14,6 +14,7 @@ javac -nowarn -encoding UTF-8 -source 8 -target 8 -d $OUT \
   app/src/com/coco/balancebubble/PetAction.java \
   app/src/com/coco/balancebubble/PetTalk.java \
   app/src/com/coco/balancebubble/Version.java \
+  app/src/com/coco/balancebubble/Viewport.java \
   app/src/com/coco/balancebubble/TextWrap.java \
   app/src/com/coco/balancebubble/Theme.java \
   app/src/com/coco/balancebubble/BubbleLayout.java \
@@ -21,11 +22,11 @@ javac -nowarn -encoding UTF-8 -source 8 -target 8 -d $OUT \
   app/src/com/coco/balancebubble/PartRig.java \
   test/SettingsKitTest.java \
   test/CurrencyTest.java test/PetTalkTest.java test/TextWrapTest.java \
-  test/VersionTest.java \
+  test/VersionTest.java test/ViewportTest.java \
   test/RigAnim.java test/PartRigTest.java test/RigGoldenTest.java test/RigAnimTest.java
 
 failed=0
-for t in SettingsKitTest CurrencyTest PetTalkTest TextWrapTest VersionTest PartRigTest RigGoldenTest RigAnimTest; do
+for t in SettingsKitTest CurrencyTest PetTalkTest TextWrapTest VersionTest ViewportTest PartRigTest RigGoldenTest RigAnimTest; do
   echo "==================== $t ===================="
   if ! java -cp $OUT $t; then
     failed=1
