@@ -41,6 +41,8 @@ public class BubbleView extends View {
 
     private final List<String> lines = new ArrayList<String>();
     private float curAmountSize;
+    /** setAmountSize 指定的字号，留到下一次 setData 生效；<=0 表示用基准字号。 */
+    private float pendingSize;
 
     private float animW, animH, targetW, targetH;
     private ValueAnimator sizeAnim;
@@ -81,13 +83,14 @@ public class BubbleView extends View {
         this.amount = (amount == null || amount.isEmpty()) ? "--" : amount;
         this.error = error;
         amountPaint.setColor(error ? 0xFFC62828 : 0xFF1B1B1F);
-        measureContent(baseAmountSize);
+        measureContent(pendingSize > 0 ? pendingSize : baseAmountSize);
         animateToTarget();
         invalidate();
     }
 
     /** 指定这一句的基准字号（服务端按消息类型调用），仍会按需自动缩小。 */
     public void setAmountSize(float px) {
+        pendingSize = px;
         measureContent(px);
         animateToTarget();
         invalidate();
@@ -107,12 +110,21 @@ public class BubbleView extends View {
         float innerMax = maxW - padH * 2;
         float size = baseSize;
         List<String> best = null;
+        boolean cut = false;
         float[] sizes = {baseSize, baseSize * 0.82f, baseSize * 0.68f};
         for (float s : sizes) {
             amountPaint.setTextSize(s);
             size = s;
-            best = TextWrap.wrap(amount, innerMax, MAX_LINES, measurer);
-            if (!wasCut(best)) break;   // 折得下就用这个字号
+            boolean[] t = new boolean[1];
+            best = TextWrap.wrap(amount, innerMax, MAX_LINES, measurer, t);
+            cut = t[0];
+            if (!cut) break;            // 折得下就用这个字号
+        }
+        if (cut) {
+            // 缩到最小字号仍然折不下：宁可让气泡多长几行，也绝不把文字截断。
+            amountPaint.setTextSize(size);
+            boolean[] t2 = new boolean[1];
+            best = TextWrap.wrap(amount, innerMax, 0, measurer, t2);
         }
         curAmountSize = size;
         lines.clear();
@@ -128,10 +140,6 @@ public class BubbleView extends View {
         int n = Math.max(1, lines.size());
         targetH = padT + (hasLabel ? lineH(labelPaint) + gap : 0)
                 + n * lineH(amountPaint) + padB + tailH;
-    }
-
-    private boolean wasCut(List<String> ls) {
-        return !ls.isEmpty() && ls.get(ls.size() - 1).endsWith(String.valueOf(TextWrap.ELLIPSIS));
     }
 
     private CharSequence displayLabel(float innerMax) {
@@ -175,10 +183,13 @@ public class BubbleView extends View {
 
     @Override
     protected void onMeasure(int wSpec, int hSpec) {
-        if (!laidOutOnce) measureContent(baseAmountSize);
-        setMeasuredDimension(
-                resolveSize((int) Math.ceil(animW), wSpec),
-                resolveSize((int) Math.ceil(animH), hSpec));
+        if (!laidOutOnce) measureContent(pendingSize > 0 ? pendingSize : baseAmountSize);
+        // 补间动画进行中的 animW/animH 可能小于文字实际需要的尺寸。直接用它定尺寸，
+        // 窗口就会比文字窄或矮，超出部分被裁掉——表现就是「气泡把文字吞了」。
+        // 取「动画值」与「内容所需值」中的较大者，尺寸永不小于内容。
+        int w = (int) Math.ceil(Math.max(animW, targetW));
+        int h = (int) Math.ceil(Math.max(animH, targetH));
+        setMeasuredDimension(resolveSize(w, wSpec), resolveSize(h, hSpec));
     }
 
     @Override

@@ -8,6 +8,10 @@ import java.util.List;
  *
  * <p>写成不依赖 Android 的纯逻辑类，是为了能在 JVM 上直接跑单测
  * （沙箱里没有 Android 运行时，{@code StaticLayout} 跑不起来）。
+ *
+ * <p><b>不变量：返回的每一行宽度都不超过 maxWidth。</b>
+ * 排版方按这个预算决定气泡宽度，一旦有行超出预算，气泡就会比屏幕还宽、
+ * 文字被窗口裁掉（表现为「文字显示不全」）。
  */
 public class TextWrap {
 
@@ -29,7 +33,21 @@ public class TextWrap {
      * @return 每行的文字，行尾空白已去掉；空文本返回空列表。
      */
     public static List<String> wrap(String text, float maxWidth, int maxLines, Width w) {
+        return wrap(text, maxWidth, maxLines, w, null);
+    }
+
+    /**
+     * 同 {@link #wrap(String, float, int, Width)}，但额外报告末行是否被省略号截断。
+     *
+     * <p>调用方不应靠「末行是不是以 … 结尾」来判断截断——正文本身就可能以 … 结尾
+     * （例如「正在刷新中…」），那样会误判。
+     *
+     * @param truncatedOut 长度为 1 的数组，用于回传是否真的发生了截断；可为 null。
+     */
+    public static List<String> wrap(String text, float maxWidth, int maxLines, Width w,
+                                    boolean[] truncatedOut) {
         List<String> out = new ArrayList<String>();
+        if (truncatedOut != null) truncatedOut[0] = false;
         if (text == null || text.length() == 0) return out;
         if (maxWidth <= 0) {
             out.add(text);
@@ -62,10 +80,11 @@ public class TextWrap {
             }
             out.set(out.size() - 1, last);
         }
+        if (truncatedOut != null) truncatedOut[0] = truncated;
         return out;
     }
 
-    /** 从 from 开始，本行最多能放到哪个下标（不含）。 */
+    /** 从 from 开始，本行最多能放到哪个下标（不含）。返回的行宽保证不超过 maxWidth。 */
     private static int lineEnd(String text, int from, float maxWidth, Width w) {
         int n = text.length();
         int k = from;
@@ -73,16 +92,52 @@ public class TextWrap {
         int lastBreak = -1;
         while (k < n) {
             int tokEnd = nextTokenEnd(text, k);
+            if (tokEnd <= k) tokEnd = k + 1;        // 空 token 也要保证前进
             float tw = w.of(text, k, tokEnd);
             if (k > from && used + tw > maxWidth) break;
             used += tw;
             k = tokEnd;
             if (breakableAfter(text, k)) lastBreak = k;
         }
+        if (k == from) {
+            // 第一个 token 本身就比整行还宽（很长的英文标识符、字段路径、URL 等）：
+            // 按字符硬切。否则这一行会撑破气泡宽度，被屏幕裁掉。
+            return fitEnd(text, from, maxWidth, w);
+        }
         if (k < n && lastBreak > from) k = lastBreak;
-        // 断点正好落在标点前：把标点拉进本行，避免行首出现「，。」之类。
-        while (k < n && isNoStart(text.charAt(k))) k++;
+        // 标点禁则（行首不能出现「，。！？」等）。这里按日文排版的「追い出し」处理：
+        //   - 挤得下：把标点拉进本行；
+        //   - 挤不下：把标点连同它前面那个字符一起推到下一行。
+        // 关键是绝不能让本行超宽——超宽的气泡会被屏幕裁掉，文字就「被吞了」。
+        while (k < n && isNoStart(text.charAt(k))) {
+            int next = k + 1;
+            if (w.of(text, from, next) <= maxWidth) {
+                k = next;
+            } else if (k > from + 1) {
+                k = k - 1;
+            }
+            break;
+        }
+        // 兜底：断点回退、标点拉取都可能留下超宽的行，这里强制收到预算内。
+        if (w.of(text, from, k) > maxWidth) k = fitEnd(text, from, maxWidth, w);
         return k;
+    }
+
+    /**
+     * 从 from 起最多能放到哪个下标（不含）而不超过 maxWidth。
+     * 至少放一个字符——单个字符比 maxWidth 还宽时也只能让它单独占一行。
+     */
+    private static int fitEnd(String text, int from, float maxWidth, Width w) {
+        int n = text.length();
+        if (from >= n) return n;
+        if (w.of(text, from, n) <= maxWidth) return n;
+        int lo = from + 1, hi = n;      // 二分：找满足宽度限制的最大下标
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >>> 1;
+            if (w.of(text, from, mid) <= maxWidth) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
     }
 
     /** 从 pos 开始的 token 到哪里结束。 */
