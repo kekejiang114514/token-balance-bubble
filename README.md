@@ -43,6 +43,7 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 
 | 版本 | 文件 | 大小 | SHA-256 |
 |---|---|---|---|
+| v1.10.1 | [balance-bubble-1.10.1.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.10.1/balance-bubble-1.10.1.apk) | 304 KB | `067c7d4c…d285b` |
 | v1.10 | [balance-bubble-1.10.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.10/balance-bubble-1.10.apk) | 304 KB | `84325386…7f6d` |
 | v1.9 | [balance-bubble-1.9.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.9/balance-bubble-1.9.apk) | 304 KB | `529e538b…430b` |
 | v1.8 | [balance-bubble-1.8.apk](https://github.com/kekejiang114514/token-balance-bubble/releases/download/v1.8/balance-bubble-1.8.apk) | 304 KB | `494f7566…0598` |
@@ -57,11 +58,11 @@ APK 可以直接从 **[Releases 页面](https://github.com/kekejiang114514/token
 安装前建议核对完整校验和：
 
 ```sh
-sha256sum balance-bubble-1.10.apk
-# 8432538646100080e8cbb554dd2be7da596154e1c55bd6c22d0524860d3d7f6d
+sha256sum balance-bubble-1.10.1.apk
+# 067c7d4c100069ef966bc3666358480b3f7f1ba785270519d5dc3b69144d285b
 ```
 
-**版本关系**：十个版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留（v1.6 只出过内部构建、没有发布）。如果只想用最新版，装 v1.10 就行。
+**版本关系**：以下版本的包名和签名相同，可以直接覆盖安装，设置和 API Key 都会保留（v1.6 只出过内部构建、没有发布）。如果只想用最新版，装 v1.10.1 就行。
 
 ## 使用
 
@@ -210,7 +211,7 @@ test/RigAnimTest.java      Java 侧按真实时间线播放动画并落盘采样
 test/rig_golden.txt        黄金表：39 个状态 ×169 个采样点的位移与权重
 test/rig_anim_samples.txt  动画采样：1927 帧 ×14 个驱动量
 tools/run_tests.sh         一键跑全部单测 + 控件挂载审计
-releases/                  各版本已签名的 APK（v1.0~v1.5、v1.7、v1.8、v1.9、v1.10）
+releases/                  各版本已签名的 APK（v1.0~v1.5、v1.7、v1.8、v1.9、v1.10、v1.10.1）
 ```
 
 ## 测试
@@ -238,6 +239,7 @@ sh tools/run_tests.sh
 
 见 [CHANGELOG.md](CHANGELOG.md)。简要来说：
 
+- **v1.10.1** —— 桌宠语录库从 26 句扩充到 50 句，新增的 24 句都绑定了动作；除语料数组外没有任何代码改动
 - **v1.10** —— 修掉「所有参数都调不了」的根因：`Ui.sliderRow()` 造出了 `SeekBar` 却没 `addView` 进父容器，13 条滑杆全都没显示、也无法拖动（自 v1.7 设置页重做起就存在）；新增源码级审计 `tools/audit_ui.py` 专门拦「造了控件但没挂进视图树」
 - **v1.9** —— 修切页签/切回应用弹回顶部（重画后等布局量完再还原滚动位置），页签栏改为固定在屏幕底部；预览里的角色尺寸、显隐、动作跟滑杆实时变；滑杆拖动不再被外层滚动抢手势
 - **v1.8** —— 应用内检查更新（设置页「关于」里可检查、可打开发布页、可跳过某个版本）；修 `UpdateChecker` 漏写包声明导致的编译失败；悬浮窗自己监听设置变化，启动改用 `startForegroundService`
@@ -249,7 +251,7 @@ sh tools/run_tests.sh
 - **v1.1** —— 应用更名为「token 余额查询器」，内置角色贴图与桌面图标，扩展为六家服务商预设，金额路径与币种支持自动识别
 - **v1.0** —— 首个可用版本，支持 DeepSeek 余额查询与悬浮显示
 
-> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存；仓库中的 `app/src` 是 v1.10 的代码（v1.6 起的骨架模型也在其中）。每个版本的源码都可以在对应的 tag 上取到：`git checkout v1.10`。
+> 说明：v1.0 和 v1.1 只保留了签名后的 APK，源码快照没有留存；仓库中的 `app/src` 是 v1.10.1 的代码（v1.6 起的骨架模型也在其中）。每个版本的源码都可以在对应的 tag 上取到：`git checkout v1.10.1`。
 
 ## 已知限制
 
