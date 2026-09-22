@@ -517,4 +517,28 @@ public class Prefs {
     public static void clearPos(Context c) {
         get(c).edit().remove("px").remove("py").apply();
     }
+
+    // ---------------- 检查更新 ----------------
+
+    /** 上次检查更新的时刻（毫秒），0 表示还没查过。 */
+    public static long updCheckedAt(Context c) { return get(c).getLong("updtime", 0L); }
+    public static void setUpdCheckedAt(Context c, long ms) {
+        get(c).edit().putLong("updtime", ms).apply();
+    }
+
+    /** 用户点过「跳过此版本」的版本号，免得每次启动都弹同一个更新。 */
+    public static String updSkip(Context c) { return s(c, "updskip", ""); }
+    public static void setUpdSkip(Context c, String version) {
+        get(c).edit().putString("updskip", version == null ? "" : version).apply();
+    }
+
+    /**
+     * 运行时键：开关状态、最近一次余额、窗口位置、更新检查时间。
+     * 这些是程序自己写的，不进配置备份；悬浮窗也不该因为它们变动而重排。
+     */
+    public static boolean isRuntimeKey(String key) {
+        return "running".equals(key) || "last".equals(key) || "lastinfo".equals(key)
+                || "lasterr".equals(key) || "px".equals(key) || "py".equals(key)
+                || "updtime".equals(key) || "updskip".equals(key);
+    }
 }

@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -54,6 +55,11 @@ public class MainActivity extends Activity {
     private TextView tipLine;
     private Ui.Segment tabs;
     private int tab = 0;
+    /** 每个页签上次滚到哪儿了（切回来时还原，不然每次都弹回顶部）。 */
+    private final int[] tabScroll = new int[TAB_NAMES.length];
+    /** 关于页上的更新状态，切页签重建时用它回填。 */
+    private TextView updStatus;
+    private String updText = "";
     /** 重建界面期间为真，避免控件初始化时触发保存/推送 */
     private boolean building = false;
     /** 预览里用的示例文字（气泡 tab 里可以直接改，用来试断开行效果） */
@@ -110,11 +116,13 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (!building) buildAll();
+        autoCheckUpdate();
     }
 
     /** 整页重画：换主题、切标签、复位设置都走这里。 */
     private void buildAll() {
         building = true;
+        updStatus = null;          // 详情见下方 tabAbout()：重建后由它重新挂上
         page.removeAllViews();
         addHero();
         addPreview();
@@ -303,12 +311,19 @@ public class MainActivity extends Activity {
         tabs = ui.segment(TAB_NAMES, tab, new Ui.OnPick() {
             @Override
             public void onPick(int i) {
+                if (i == tab) return;
+                // 切页签会重建内容，滚动位置默认归零 —— 先把当前看到的记下来，切回来再还原。
+                tabScroll[tab] = scroller.getScrollY();
                 tab = i;
                 buildAll();
+                final int want = tabScroll[i];
                 scroller.post(new Runnable() {
                     @Override
                     public void run() {
-                        scroller.smoothScrollTo(0, 0);
+                        int content = page.getHeight();
+                        int window = scroller.getHeight()
+                                - scroller.getPaddingTop() - scroller.getPaddingBottom();
+                        scroller.scrollTo(0, Math.max(0, Math.min(want, content - window)));
                     }
                 });
             }
@@ -337,11 +352,24 @@ public class MainActivity extends Activity {
 
     // ==================== 公共小工具 ====================
 
-    /** 给悬浮窗发指令。 */
+    /**
+     * 给悬浮窗发指令。
+     *
+     * <p>启动动作在 API 26 以上要用 startForegroundService：服务一起来就会挂通知栏，
+     * 用 startService 的话系统在你退到后台时会拒绝启动（Android 8 起前台服务必须这么启）。
+     * 系统不允许后台启动时直接放弃这次推送，不弹错 —— 设置已经存盘，下次进前台会补上。
+     */
     private void send(String action) {
         Intent i = new Intent(this, BubbleService.class);
         i.setAction(action);
-        startService(i);
+        try {
+            if (BubbleService.ACTION_START.equals(action) && Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(i);
+            } else {
+                startService(i);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     /**
@@ -564,10 +592,9 @@ public class MainActivity extends Activity {
         rebuild();
     }
 
-    /** 运行状态（开关、最近一次余额、窗口位置）不进备份。 */
+    /** 运行状态（开关、最近一次余额、窗口位置、检查更新时间）不进备份。 */
     private static boolean isVolatile(String key) {
-        return "running".equals(key) || "last".equals(key) || "lastinfo".equals(key)
-                || "lasterr".equals(key) || "px".equals(key) || "py".equals(key);
+        return Prefs.isRuntimeKey(key);
     }
 
     /** 版本号从 manifest 里读，免得和生成脚本里写的不一致。 */
@@ -1207,5 +1234,118 @@ public class MainActivity extends Activity {
         c4.addView(ui.text("鲸鱼娘桌宠 " + versionName(), 13.5f, ui.themeTxt()));
         c4.addView(ui.hint("主题、气泡尺寸、互动方式都在这里改，改完立刻生效，不用重启应用。"));
         page.addView(c4);
+
+        LinearLayout c5 = ui.card();
+        c5.addView(ui.cardTitle("检查更新"));
+        c5.addView(ui.hint("每天最多自动查一次，发现新版本会弹提示。也可以点下面手动查。"));
+        updStatus = ui.text(updText.length() > 0 ? updText : "还没查过", 13f, ui.themeTxt());
+        c5.addView(updStatus);
+        LinearLayout row3 = new LinearLayout(this);
+        row3.setOrientation(LinearLayout.HORIZONTAL);
+        row3.setPadding(0, ui.dp(6), 0, 0);
+        ui.buttonRow(row3, "立即检查", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                checkUpdate(true);
+            }
+        });
+        ui.buttonRow(row3, "打开发布页", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openUrl(UpdateChecker.PAGE_URL);
+            }
+        });
+        c5.addView(row3);
+        page.addView(c5);
+    }
+
+    // ---------------- 检查更新 ----------------
+
+    private void setUpdStatus(String text) {
+        updText = text;
+        if (updStatus != null) updStatus.setText(text);
+    }
+
+    /**
+     * 自动检查：距上次超过一天才真去查，免得每次打开应用都打一次接口
+     * （GitHub 匿名额度是每小时 60 次，一天一次绰绰有余）。
+     */
+    private void autoCheckUpdate() {
+        long last = Prefs.updCheckedAt(this);
+        if (System.currentTimeMillis() - last < 24L * 3600L * 1000L) return;
+        checkUpdate(false);
+    }
+
+    /**
+     * 去 GitHub 看最新 release。网络在子线程，结果回主线程再动界面。
+     *
+     * @param manual 用户主动点的（失败要吭声、查完给个回执），还是自动查的（安静失败）
+     */
+    private void checkUpdate(final boolean manual) {
+        if (manual) setUpdStatus("正在检查…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final UpdateChecker.Info info = UpdateChecker.latest();
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Prefs.setUpdCheckedAt(MainActivity.this, System.currentTimeMillis());
+                        if (info == null) {
+                            if (manual) setUpdStatus("检查失败：网络不通或接口限流，稍后再试");
+                            return;
+                        }
+                        String cur = versionName();
+                        if (Version.isNewer(info.version, cur)) {
+                            setUpdStatus("发现新版本 " + info.tag + "（当前 " + cur + "）");
+                            if (!info.version.equals(Prefs.updSkip(MainActivity.this))) {
+                                showUpdateDialog(info, cur);
+                            }
+                        } else {
+                            setUpdStatus("已是最新版本 " + cur);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** 有更新时的提示：可以直接去下载。 */
+    private void showUpdateDialog(final UpdateChecker.Info info, String cur) {
+        String msg = "当前版本 " + cur + "，最新版本 " + info.tag + "。";
+        String notes = info.shortNotes(200);
+        if (notes.length() > 0) msg += "\n\n" + notes;
+        final String target = info.url;
+        String ok = info.direct ? "下载 APK" : "打开发布页";
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("有新版本 " + info.tag)
+                .setMessage(msg)
+                .setPositiveButton(ok, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        openUrl(target);
+                    }
+                })
+                .setNeutralButton("跳过这个版本", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        Prefs.setUpdSkip(MainActivity.this, info.version);
+                        setUpdStatus("已跳过 " + info.tag + "，下次检查不再提示");
+                    }
+                })
+                .setNegativeButton("以后再说", null)
+                .show();
+    }
+
+    /** 用系统浏览器打开链接；没有浏览器就退回复制地址。 */
+    private void openUrl(String url) {
+        if (url == null || url.length() == 0) return;
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        } catch (Exception e) {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("url", url));
+            toast("没有可用的浏览器，地址已复制到剪贴板");
+        }
     }
 }

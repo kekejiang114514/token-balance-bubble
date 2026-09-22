@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.os.Build;
@@ -51,6 +52,33 @@ public class BubbleService extends Service {
     /** 当前生效的气泡外观（设置页改完会重建） */
     private BubbleStyle style;
     private final Handler ui = new Handler(Looper.getMainLooper());
+
+    /**
+     * 设置一变就重排悬浮窗。
+     *
+     * <p>这里监听 SharedPreferences，而不是等设置页推 Intent 过来：设置页那边的推送
+     * 依赖「服务在跑」这个判断，一旦标记失准（比如服务被系统杀过、设置页没拿到状态），
+     * 改什么都不会落到窗口上。监听是进程内的，改完必到。
+     */
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefWatch =
+            new SharedPreferences.OnSharedPreferenceChangeListener() {
+                @Override
+                public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
+                    if (root == null) return;
+                    if (Prefs.isRuntimeKey(key)) return;  // 位置/余额这类自己写的键，回灌会打架
+                    ui.removeCallbacks(restyle);
+                    ui.postDelayed(restyle, 60);          // 拖滑杆时合并成一次重排
+                }
+            };
+
+    private final Runnable restyle = new Runnable() {
+        @Override
+        public void run() {
+            if (root == null) return;
+            applyStyle();
+            restartTimers();
+        }
+    };
 
     private boolean refreshing = false;
     private boolean dragging = false;
@@ -196,6 +224,8 @@ public class BubbleService extends Service {
             stopSelf();
             return;
         }
+        // 窗口真的挂上去了才认「在跑」——设置页拿这个标记决定要不要推送改动。
+        Prefs.setRunning(this, true);
         root.post(new Runnable() {
             @Override
             public void run() {
@@ -653,7 +683,15 @@ public class BubbleService extends Service {
     }
 
     @Override
+    public void onCreate() {
+        super.onCreate();
+        Prefs.get(this).registerOnSharedPreferenceChangeListener(prefWatch);
+    }
+
+    @Override
     public void onDestroy() {
+        Prefs.get(this).unregisterOnSharedPreferenceChangeListener(prefWatch);
+        ui.removeCallbacks(restyle);
         ui.removeCallbacksAndMessages(null);
         if (root != null && wm != null) {
             try {
@@ -662,6 +700,8 @@ public class BubbleService extends Service {
             }
             root = null;
         }
+        // 窗口已经摘掉了，标记跟着落地，免得设置页以为桌宠还开着。
+        Prefs.setRunning(this, false);
         super.onDestroy();
     }
 }
